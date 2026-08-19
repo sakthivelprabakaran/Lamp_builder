@@ -135,8 +135,13 @@ def make_shade(params, preview=True, export=False):
         lamp_engine.write_binary_stl(path, v, f)
         result["metrics"] = rep
         result["files"] = {"stl": "shade.stl"}
-        if not ok:
+        if not rep["watertight"]:
             result["warnings"].append("Mesh is not watertight -- do not print.")
+        elif rep.get("components", 1) > 1:
+            result["warnings"].append(
+                "Pattern splits the shade into %d disconnected pieces -- it would print "
+                "as loose parts. Lower the hole threshold, reduce hole size, or keep a "
+                "connecting web." % rep["components"])
     else:
         result["vertices"] = v.reshape(-1).tolist()
         result["indices"] = f.reshape(-1).tolist()

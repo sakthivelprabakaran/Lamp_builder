@@ -80,7 +80,7 @@
   #ncanvas{ position:relative; flex:1; overflow:hidden; cursor:grab; }
   #ncanvas.grabbing{ cursor:grabbing; }
   #nworld{ position:absolute; left:0; top:0; transform:translate(0px,0px); }
-  #nwires{ position:absolute; left:-2000px; top:-2000px; width:8000px; height:6000px;
+  #nwires{ position:absolute; left:-4000px; top:-4000px; width:12000px; height:9000px;
            pointer-events:none; overflow:visible; }
   .ncard{ position:absolute; width:160px; background:#1c212b; border:1px solid var(--line);
           border-radius:8px; box-shadow:0 3px 12px rgba(0,0,0,.45); font-size:11px; }
@@ -511,7 +511,7 @@ async function loadPreset(name){
   Object.assign(shade, s); Object.assign(base, d.base||{});
   syncSliders(); renderStack(); baseDirty=true;
   if(s.graph && s.graph.nodes){          // graph preset -> restore node graph + mode
-    NG.graph = JSON.parse(JSON.stringify(s.graph)); setMode('graph'); return;
+    NG.graph = JSON.parse(JSON.stringify(s.graph)); syncUid(); setMode('graph'); return;
   }
   delete shade.graph; setMode('stack');
 }
@@ -544,14 +544,31 @@ document.getElementById('savePreset').onclick = savePreset;
 document.getElementById('presetSel').onchange = e=> loadPreset(e.target.value);
 
 // ---- field node graph (Phase 6) -------------------------------------------
-const NG = { reg:{}, graph:{nodes:[],edges:[]}, mode:'stack', pan:{x:40,y:20}, uid:1 };
+const NG = { reg:{}, graph:{nodes:[],edges:[]}, mode:'stack', pan:{x:40,y:20}, zoom:1, uid:1 };
 const W = 160, HEADER = 24, P0 = 30, PSTEP = 20;   // card geometry (matches CSS)
+const WOFF = 4000;                                 // wire-SVG origin offset (see CSS)
 const $c = ()=>document.getElementById('ncanvas');
 const $w = ()=>document.getElementById('nworld');
 const $svg = ()=>document.getElementById('nwires');
 
 function scheduleGraph(){ if(NG.mode==='graph'){ shade.graph = NG.graph; scheduleShade(); } }
+function applyTransform(){ const w=$w(); if(w) w.style.transform=`translate(${NG.pan.x}px,${NG.pan.y}px) scale(${NG.zoom})`; }
 function newId(t){ return t+'_'+(NG.uid++); }
+// Keep the id counter ahead of any ids already in a loaded graph, else a freshly
+// added node can collide with a loaded one and silently overwrite it server-side.
+function syncUid(){
+  let mx=0;
+  (NG.graph.nodes||[]).forEach(n=>{ const m=/_(\d+)$/.exec(n.id||''); if(m) mx=Math.max(mx,+m[1]); });
+  NG.uid = mx+1;
+}
+// Would wiring from->to create a cycle? True if `to` can already reach `from`.
+function reaches(start,target){
+  const seen=new Set(), stack=[start];
+  while(stack.length){ const n=stack.pop(); if(n===target) return true;
+    if(seen.has(n)) continue; seen.add(n);
+    NG.graph.edges.forEach(e=>{ if(e.from===n) stack.push(e.to); }); }
+  return false;
+}
 function portY(i){ return P0 + i*PSTEP; }
 function outAnchor(n){ return {x:n.x+W, y:n.y+P0}; }
 function inAnchor(n,i){ return {x:n.x, y:n.y+portY(i)}; }
@@ -584,7 +601,7 @@ function buildAddMenu(){
 function renderGraph(){
   const world=$w(); if(!world) return;
   [...world.querySelectorAll('.ncard')].forEach(e=>e.remove());
-  world.style.transform=`translate(${NG.pan.x}px,${NG.pan.y}px)`;
+  applyTransform();
   NG.graph.nodes.forEach(makeCard);
   renderWires();
 }
@@ -641,14 +658,14 @@ function bez(a,b){ const dx=Math.max(40,Math.abs(b.x-a.x)*0.5);
 
 function renderWires(tempPath){
   const svg=$svg(); if(!svg) return;
-  // svg is offset (-2000,-2000); shift paths so world (0,0)=svg (2000,2000)
-  const OFF=2000;
+  // svg is offset (-WOFF,-WOFF); shift paths so world (0,0) = svg (WOFF,WOFF)
   let paths='';
   NG.graph.edges.forEach(ed=>{
     const a=nodeById(ed.from), b=nodeById(ed.to); if(!a||!b) return;
-    const spec=NG.reg[b.type]; const idx=(spec.inputs||[]).indexOf(ed.toPort); if(idx<0)return;
+    const spec=NG.reg[b.type]; if(!spec) return;
+    const idx=(spec.inputs||[]).indexOf(ed.toPort); if(idx<0)return;
     const p1=outAnchor(a), p2=inAnchor(b,idx);
-    paths+=`<path d="${bez({x:p1.x+OFF,y:p1.y+OFF},{x:p2.x+OFF,y:p2.y+OFF})}" fill="none" stroke="#6b7686" stroke-width="2"/>`;
+    paths+=`<path d="${bez({x:p1.x+WOFF,y:p1.y+WOFF},{x:p2.x+WOFF,y:p2.y+WOFF})}" fill="none" stroke="#6b7686" stroke-width="2"/>`;
   });
   if(tempPath) paths+=`<path d="${tempPath}" fill="none" stroke="#f5a623" stroke-width="2" stroke-dasharray="5 4"/>`;
   svg.innerHTML=paths;
@@ -656,7 +673,7 @@ function renderWires(tempPath){
 
 // --- interactions ---
 function evWorld(e){ const r=$c().getBoundingClientRect();
-  return {x:e.clientX-r.left-NG.pan.x, y:e.clientY-r.top-NG.pan.y}; }
+  return {x:(e.clientX-r.left-NG.pan.x)/NG.zoom, y:(e.clientY-r.top-NG.pan.y)/NG.zoom}; }
 function startNodeDrag(e,n,card){
   e.preventDefault(); const s=evWorld(e), ox=n.x-s.x, oy=n.y-s.y;
   function mv(ev){ const w=evWorld(ev); n.x=Math.round(w.x+ox); n.y=Math.round(w.y+oy);
@@ -665,9 +682,9 @@ function startNodeDrag(e,n,card){
   document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
 }
 function startWire(e,fromId){
-  e.preventDefault(); const OFF=2000; const a=outAnchor(nodeById(fromId));
+  e.preventDefault(); const a=outAnchor(nodeById(fromId));
   function mv(ev){ const w=evWorld(ev);
-    renderWires(bez({x:a.x+OFF,y:a.y+OFF},{x:w.x+OFF,y:w.y+OFF})); }
+    renderWires(bez({x:a.x+WOFF,y:a.y+WOFF},{x:w.x+WOFF,y:w.y+WOFF})); }
   function up(ev){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up);
     const el=document.elementFromPoint(ev.clientX,ev.clientY);
     if(el&&el.classList.contains('port')&&el.dataset.kind==='in'){
@@ -679,14 +696,17 @@ function startWire(e,fromId){
 function startPan(e){
   if(e.target.closest('.ncard')) return;
   const c=$c(); c.classList.add('grabbing'); const sx=e.clientX-NG.pan.x, sy=e.clientY-NG.pan.y;
-  function mv(ev){ NG.pan.x=ev.clientX-sx; NG.pan.y=ev.clientY-sy;
-    $w().style.transform=`translate(${NG.pan.x}px,${NG.pan.y}px)`; }
+  function mv(ev){ NG.pan.x=ev.clientX-sx; NG.pan.y=ev.clientY-sy; applyTransform(); }
   function up(){ c.classList.remove('grabbing'); document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
   document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
 }
 
 function addEdge(from,to,port){
   if(from===to) return;                                  // no self-loops
+  if(reaches(to,from)){                                  // would create a cycle
+    showWarn(['Cannot wire that — it would create a loop in the graph.']);
+    renderWires(); return;
+  }
   NG.graph.edges = NG.graph.edges.filter(e=>!(e.to===to&&e.toPort===port)); // one wire per input
   NG.graph.edges.push({from,to,toPort:port});
   renderGraph(); scheduleGraph();
@@ -720,12 +740,20 @@ function fitGraph(){
   try{
     const g = await (await fetch('/api/graph_defaults')).json();
     NG.reg = g.registry||{}; NG.graph = JSON.parse(JSON.stringify(g.default_graph||{nodes:[],edges:[]}));
-    buildAddMenu();
+    syncUid(); buildAddMenu();
   }catch(e){ console.warn('graph defaults failed', e); }
   document.querySelectorAll('#shapemode .seg button').forEach(b=> b.onclick=()=>setMode(b.dataset.mode));
   document.getElementById('naddBtn').onclick=()=> addNode(document.getElementById('naddSel').value);
   document.getElementById('nfit').onclick=fitGraph;
   $c().addEventListener('mousedown', startPan);
+  $c().addEventListener('wheel', e=>{           // zoom toward the cursor
+    e.preventDefault();
+    const before=evWorld(e), r=$c().getBoundingClientRect();
+    NG.zoom = Math.min(2.5, Math.max(0.3, NG.zoom * (e.deltaY<0 ? 1.1 : 1/1.1)));
+    NG.pan.x = (e.clientX-r.left) - before.x*NG.zoom;
+    NG.pan.y = (e.clientY-r.top) - before.y*NG.zoom;
+    applyTransform();
+  }, {passive:false});
   await loadPresetList();
   runShade();
 })();

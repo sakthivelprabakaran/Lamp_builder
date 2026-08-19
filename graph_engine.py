@@ -54,6 +54,11 @@ class Ctx:
         self.u = theta / (2.0 * math.pi)
         self.v = zf
         self.nz, self.nt = theta.shape
+        # Column origin as a fraction of a cell: 0 for the vertex grid (columns at
+        # j/nt), 0.5 for the cell-centre grid (columns at (j+0.5)/nt). The warp
+        # sampler needs this so a warped field lines up with the surface it modifies
+        # instead of sitting half a cell off.
+        self.col_off = float(self.u.flat[0] * self.nt) if self.nt else 0.0
 
 
 def _reg(kind, inputs, params, missing=None, category="", label=None):
@@ -92,7 +97,7 @@ def sample(field, u_new, v_new, ctx):
     row index is recovered by interpolating against zf1d (handles the collar's
     non-uniform rows)."""
     nz, nt = ctx.nz, ctx.nt
-    uu = np.mod(u_new, 1.0) * nt
+    uu = np.mod(u_new, 1.0) * nt - ctx.col_off   # account for the grid's column origin
     c0 = np.floor(uu).astype(np.intp)
     cf = uu - c0
     c0m = c0 % nt
@@ -189,22 +194,30 @@ def _n_voronoi(ins, p, ctx):
     metric = int(round(_p(p, "metric", 0)))
     rng = np.random.default_rng(seed & 0x7FFFFFFF)
     gu, gv = np.meshgrid((np.arange(cu) + 0.5) / cu, (np.arange(cv) + 0.5) / cv)
-    seeds = np.stack([gu.ravel(), gv.ravel()], axis=1)
-    seeds[:, 0] += (rng.uniform(-0.5, 0.5, len(seeds)) * jit) / cu
-    seeds[:, 1] += (rng.uniform(-0.5, 0.5, len(seeds)) * jit) / cv
-    u = ctx.u.ravel(); v = ctx.v.ravel()
-    # periodic distance in u: min over the wrap
-    du = np.abs(u[:, None] - seeds[None, :, 0]); du = np.minimum(du, 1.0 - du)
-    dv = v[:, None] - seeds[None, :, 1]
-    d = np.sqrt((du * cu) ** 2 + (dv * cv) ** 2)      # cell-normalised distance
-    if metric:
-        d2 = np.partition(d, 1, axis=1)[:, :2]
-        field = (d2[:, 1] - d2[:, 0])
-    else:
-        field = d.min(axis=1)
-    field = field.reshape(ctx.nz, ctx.nt)
-    mx = field.max() or 1.0
-    return _norm01(field / mx)
+    seeds = np.stack([gu.ravel(), gv.ravel()], axis=1).astype(np.float32)
+    seeds[:, 0] += (rng.uniform(-0.5, 0.5, len(seeds)) * jit / cu).astype(np.float32)
+    seeds[:, 1] += (rng.uniform(-0.5, 0.5, len(seeds)) * jit / cv).astype(np.float32)
+    su = seeds[:, 0]; sv = seeds[:, 1]
+    u = ctx.u.ravel().astype(np.float32); v = ctx.v.ravel().astype(np.float32)
+    npts = u.size
+    field = np.empty(npts, dtype=np.float32)
+    # Chunk over points so the (points x seeds) distance matrix stays bounded in
+    # memory even at export res with many cells (a 36k x 1200 float64 array is ~350 MB).
+    step = max(1, int(2_000_000 // max(1, len(seeds))))
+    for s in range(0, npts, step):
+        e_ = min(npts, s + step)
+        du = np.abs(u[s:e_, None] - su[None, :]); du = np.minimum(du, 1.0 - du)  # periodic in u
+        dv = v[s:e_, None] - sv[None, :]
+        d = np.sqrt((du * cu) ** 2 + (dv * cv) ** 2)     # cell-normalised distance
+        if metric:
+            d2 = np.partition(d, 1, axis=1)[:, :2]
+            field[s:e_] = d2[:, 1] - d2[:, 0]
+        else:
+            field[s:e_] = d.min(axis=1)
+    # Normalise by a RESOLUTION-INDEPENDENT constant (not the empirical max, which
+    # drifts between preview and export res so holes shift between preview and print).
+    norm = 0.6 if metric else 1.0
+    return _norm01((field / norm).reshape(ctx.nz, ctx.nt))
 
 
 @_reg("gyroid", [], [("period_u", "Period θ", 1, 20, 1, 6),
@@ -227,9 +240,7 @@ def _n_stripes(ins, p, ctx):
     n = _p(p, "count", 10); duty = _p(p, "duty", 0.5); soft = _p(p, "soft", 0.05) + 1e-6
     coord = (ctx.u if axis == 0 else ctx.v) * n
     saw = np.mod(coord, 1.0)
-    # smooth band: 1 inside [0,duty], 0 outside, soft edges
-    e = np.clip(saw / soft, 0, 1) * np.clip((duty - saw) / soft, 0, 1)
-    e2 = np.clip((saw - (1 - soft)) / soft, 0, 1) * 0  # noop, keep readable
+    # smooth band: ~1 inside [0, duty], ~0 outside, soft edges of width `soft`
     return _norm01(np.clip(np.minimum(saw, duty - saw) / soft + 0.5, 0, 1))
 
 
@@ -378,7 +389,8 @@ REGISTRY["output"] = {
     "kind": "output", "label": "Output", "category": "terminal",
     "inputs": ["radius", "holes"],
     "params": [("threshold", "Hole threshold", 0.05, 0.95, 0.01, 0.5),
-               ("invert", "Invert holes", 0, 1, 1, 0)],
+               ("invert", "Invert holes", 0, 1, 1, 0),
+               ("top_solid", "Top solid band mm", 0, 40, 1, 12)],
     "missing": {}, "fn": None,
 }
 
@@ -409,9 +421,35 @@ def _find_output(nodes):
     return outs[0]
 
 
-def evaluate(graph, theta, zf, zf1d):
+def output_node(graph):
+    for n in graph.get("nodes", []):
+        if n.get("type") == "output":
+            return n
+    return None
+
+
+def output_wants(graph, port):
+    """True if the output node's `port` (e.g. 'holes') is wired."""
+    out = output_node(graph)
+    if out is None:
+        return False
+    return any(e.get("to") == out["id"] and e.get("toPort") == port
+               for e in graph.get("edges", []))
+
+
+def output_param(graph, key, default):
+    out = output_node(graph)
+    if out is None:
+        return default
+    return _p(out.get("params", {}), key, default)
+
+
+def evaluate(graph, theta, zf, zf1d, need_radius=True, need_holes=True):
     """Evaluate the graph on the given grid. Returns dict:
-       {"radius": (nz,nt) mm float, "holes": (nz,nt) bool or None, "warnings": [...]}"""
+       {"radius": (nz,nt) mm float or None, "holes": (nz,nt) bool or None,
+        "warnings": [...]}. `need_radius`/`need_holes` skip a branch the caller
+       won't use (the mesher evaluates radius on the vertex grid and holes on the
+       cell-centre grid, so each call only needs one)."""
     ctx = Ctx(theta, zf, zf1d)
     nodes, incoming = _index(graph)
     out_id = _find_output(nodes)
@@ -448,28 +486,31 @@ def evaluate(graph, theta, zf, zf1d):
         cache[nid] = val
         return val
 
-    # radius (required)
-    rad_src = incoming.get(out_id, {}).get("radius")
-    if rad_src is None:
-        raise GraphError("output.radius is not connected -- wire a Form/Displace into it")
-    radius = ev(rad_src)
-    if float(np.nanmean(radius)) < 5.0:
-        warnings.append("Radius averages <5 mm -- did you wire a 0..1 pattern straight "
-                        "into radius? Route it through a Displace node.")
+    out_node = nodes[out_id]
+
+    # radius (required when the caller needs it)
+    radius = None
+    if need_radius:
+        rad_src = incoming.get(out_id, {}).get("radius")
+        if rad_src is None:
+            raise GraphError("output.radius is not connected -- wire a Form/Displace into it")
+        radius = np.asarray(ev(rad_src), dtype=float)
+        if float(np.nanmean(radius)) < 5.0:
+            warnings.append("Radius averages <5 mm -- did you wire a 0..1 pattern straight "
+                            "into radius? Route it through a Displace node.")
 
     # holes (optional)
-    out_node = nodes[out_id]
     holes = None
-    hole_src = incoming.get(out_id, {}).get("holes")
-    if hole_src is not None:
-        field = _norm01(ev(hole_src))
-        thr = evparam(out_node, "threshold", 0.5)
-        inv = int(round(evparam(out_node, "invert", 0)))
-        open_ = field >= thr
-        holes = ~open_ if inv else open_       # True where a HOLE is cut
+    if need_holes:
+        hole_src = incoming.get(out_id, {}).get("holes")
+        if hole_src is not None:
+            field = _norm01(ev(hole_src))
+            thr = evparam(out_node, "threshold", 0.5)
+            inv = int(round(evparam(out_node, "invert", 0)))
+            open_ = field >= thr
+            holes = ~open_ if inv else open_       # True where a HOLE is cut
 
-    return {"radius": np.asarray(radius, dtype=float),
-            "holes": holes, "warnings": warnings}
+    return {"radius": radius, "holes": holes, "warnings": warnings}
 
 
 def registry_for_ui():
@@ -492,11 +533,11 @@ DEFAULT_GRAPH = {
         {"id": "form", "type": "form", "x": 60, "y": 60,
          "params": {"r_bottom": 70, "r_top": 55, "bulge": 18, "bulge_pos": 0.5}},
         {"id": "vor", "type": "voronoi", "x": 60, "y": 240,
-         "params": {"cells_u": 12, "cells_v": 10, "jitter": 0.8, "metric": 0, "seed": 7}},
+         "params": {"cells_u": 12, "cells_v": 10, "jitter": 0.8, "metric": 1, "seed": 7}},
         {"id": "disp", "type": "displace", "x": 360, "y": 90,
          "params": {"amp": 0.10, "mode": 1}},
         {"id": "out", "type": "output", "x": 640, "y": 140,
-         "params": {"threshold": 0.5, "invert": 0}},
+         "params": {"threshold": 0.35, "invert": 0, "top_solid": 12}},
     ],
     "edges": [
         {"from": "form", "to": "disp", "toPort": "base"},

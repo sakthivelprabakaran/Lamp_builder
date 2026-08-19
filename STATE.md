@@ -91,6 +91,40 @@ Python http.server default HTTP/1.0 races with browser socket reuse -> live
 sliders (many quick fetches) hung. Fix: `protocol_version="HTTP/1.1"` + `timeout=30`
 on Handler (every response already sets Content-Length). Debug counters removed.
 
+## Phase 6 bug-fix pass (2026-08-19) — 9 issues found + fixed
+A self-review of the node graph surfaced 9 logical bugs; all fixed + verified:
+1. **Base didn't couple to the graph/stack form** (twist-lock wouldn't mate). New
+   `lamp_engine._form_params()` is the single source of truth for r_bottom/r_top/
+   bulge/bulge_pos across graph node / stack op / flat; used by `build_shade_mesh`
+   AND `_base_dims`. (Also fixed the same latent Phase-5 bug.) Verified: form
+   r_bottom=100 → base plate_r=104, collar sized for 100.
+2. **Watertight ≠ single piece.** Hole patterns can sever the wall into floating
+   islands that still passed the gate. `verify_mesh` now runs union-find
+   (`_count_components`) and `ok` requires `components==1`; report adds `components`/
+   `single_piece`. Export warns "splits into N disconnected pieces". **This exposed
+   that the shipped DEFAULT_GRAPH was 6 pieces** — changed voronoi to F2-F1 metric +
+   threshold 0.35 → now 1 piece (connected web). Preview stays fast (verify only on
+   export; union-find is export-only).
+3. **Graph radius could invert the shell** (r_in outside r_out). Floor
+   `r_out = max(r_out, wall+0.8)` in graph mode. Verified: 0 inverted verts.
+4. **Node-id collision** after loading a saved graph (session counter). `syncUid()`
+   sets the counter past the max numeric suffix; called on default + preset load.
+5. **Multi-node cycles** were creatable in the UI (only self-loops were blocked).
+   `reaches()` rejects an edge that would close a loop; backend also detects cycles
+   gracefully (GraphError → warning, no 500). Verified both.
+6. **Voronoi normalised per-eval** → preview≠export holes. Now a resolution-
+   independent constant. Verified: open-frac 0.3442 (preview) vs 0.3440 (export).
+   Also chunked + float32 so 40×30 cells no longer risks a ~350 MB matrix (3.7 s, OK).
+7. **Double full graph eval per preview.** `evaluate(..., need_radius, need_holes)`
+   + `output_wants()` so the radius grid skips holes and the holes grid skips radius,
+   and holes are only evaluated when the `holes` port is wired.
+8. **`top_solid` hidden but active** in graph mode. Moved it onto the output node's
+   params (`output_param()` reads it); sidebar Perforation group stays hidden.
+9. Minor: warp **half-cell θ offset** on the holes grid (`Ctx.col_off` in the
+   sampler); removed dead code in `stripes`; enlarged wire-SVG bounds (WOFF=4000);
+   added **cursor-anchored wheel zoom** (0.3–2.5×) to the node canvas.
+Perf after fixes: default graph preview ~0.87 s server-side (stack ~0.37 s).
+
 ## Phase 6 DONE + verified — field node graph (2026-08-19)
 Grasshopper-style **field** node graph: every wire carries a scalar FIELD over the
 shade's (θ,z) surface (numpy array). Chosen over literal geometry graph (too slow/

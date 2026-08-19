@@ -383,23 +383,39 @@ def _declink(solid, passes=4):
     return m
 
 
+def _form_params(shade_params):
+    """The effective profile keys (r_bottom/r_top/bulge/bulge_pos) whatever drives
+    the shape -- a Phase-6 graph `form` node, a Phase-5 stack `form` op, or flat
+    params. Single source of truth so the SHADE and the BASE couple to the same
+    numbers (otherwise the base is built for the flat default while the shade uses
+    the graph/stack form -> the twist-lock never mates)."""
+    shade_params = shade_params or {}
+    graph = shade_params.get("graph")
+    if graph:
+        fnode = next((n for n in graph.get("nodes", []) if n.get("type") == "form"), None)
+        src = (fnode or {}).get("params") or {}
+    else:
+        stack = shade_params.get("stack")
+        src = (next((o for o in stack if o.get("type") == "form"), None) or {}) if stack \
+            else shade_params
+    out = {}
+    for k in ("r_bottom", "r_top", "bulge", "bulge_pos"):
+        if k in src:
+            try:
+                out[k] = float(src[k])
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 def build_shade_mesh(params):
     """Return (verts Nx3 float32, faces Mx3 int32) for a watertight thin-wall shade."""
     p = dict(SHADE_DEFAULTS); p.update({k: params[k] for k in params if k in SHADE_DEFAULTS})
     # Surface shape comes from EITHER a field node-graph (Phase 6) or the operator
     # stack (Phase 5); either way synthesise a fallback so legacy callers render.
     graph = params.get("graph")
-    if graph:
-        fnode = next((n for n in graph.get("nodes", []) if n.get("type") == "form"), None)
-        form = (fnode or {}).get("params")
-        stack = None
-    else:
-        stack = params.get("stack") or _default_stack_from_flat(p)
-        form = next((o for o in stack if o.get("type") == "form"), None)
-    if form:                                 # let the bayonet/base couple to the form
-        for k in ("r_bottom", "r_top", "bulge", "bulge_pos"):
-            if k in form:
-                p[k] = float(form[k])
+    stack = None if graph else (params.get("stack") or _default_stack_from_flat(p))
+    p.update(_form_params(params))           # couple bayonet/base to the active form
     nt = max(24, int(p["res_theta"]))
     nz = max(4, int(p["res_z"]))
     H = float(p["height"])
@@ -425,7 +441,12 @@ def build_shade_mesh(params):
     z = zf * H
 
     if graph:
-        r_out = graph_engine.evaluate(graph, theta, zf, zf1d)["radius"].astype(float).copy()
+        r_out = graph_engine.evaluate(graph, theta, zf, zf1d,
+                                      need_holes=False)["radius"].astype(float).copy()
+        # A graph can drive radius below the wall (e.g. a 0..1 pattern wired straight
+        # into radius) -> the inner wall crosses outside the outer = inverted,
+        # self-intersecting shell that still reports "watertight". Floor it.
+        r_out = np.maximum(r_out, wall + 0.8)
     else:
         r_out, _ = eval_stack(theta, zf, stack)
     r_in = np.maximum(r_out - wall, 0.5)     # keep inner radius positive
@@ -466,19 +487,21 @@ def build_shade_mesh(params):
     # _perforation_solid samples), on the TRUE height fraction so patterns line up
     # with the visible surface. Stack mode: the Phase-3 perforation patterns.
     graph_holes = None
-    if graph:
+    top_solid = float(p["top_solid"])
+    if graph and graph_engine.output_wants(graph, "holes"):    # only if `holes` is wired
         zc = (z[:-1, 0] + z[1:, 0]) / 2.0
         zf_c = zc / H
         th_c = 2.0 * math.pi * (np.arange(nt) + 0.5) / nt
         TH = np.broadcast_to(th_c[None, :], (nz - 1, nt)).copy()
         ZF = np.broadcast_to(zf_c[:, None], (nz - 1, nt)).copy()
-        graph_holes = graph_engine.evaluate(graph, TH, ZF, zf_c)["holes"]  # bool or None
+        graph_holes = graph_engine.evaluate(graph, TH, ZF, zf_c, need_radius=False)["holes"]
+        top_solid = graph_engine.output_param(graph, "top_solid", top_solid)  # graph owns it
     pat_on = (graph_holes is not None) if graph else (str(p["pattern"]).lower() != "none")
     solid = np.ones((nz - 1, nt), dtype=bool)
     if pat_on:
         zc = (z[:-1, 0] + z[1:, 0]) / 2.0                       # cell-centre heights
         z_lo = collar_h + 2.0
-        z_hi = H - float(p["top_solid"])
+        z_hi = H - top_solid
         if z_hi <= z_lo + 5.0:
             z_hi = z_lo + 5.0
         band = (zc >= z_lo) & (zc <= z_hi)                      # (nz-1,)
@@ -599,12 +622,43 @@ def verify_mesh(verts, faces):
     nonmanifold = int(np.count_nonzero(counts > 2))
     V, E, F = len(verts), len(counts), len(faces)
     euler = V - E + F
-    ok = boundary == 0 and nonmanifold == 0
+    components = _count_components(f, V)
+    ok = boundary == 0 and nonmanifold == 0 and components == 1
     return ok, {
         "verts": V, "edges": E, "tris": F, "euler": euler,
         "boundary_edges": boundary, "nonmanifold_edges": nonmanifold,
-        "watertight": ok,
+        "components": components, "watertight": boundary == 0 and nonmanifold == 0,
+        "single_piece": components == 1,
     }
+
+
+def _count_components(faces, nverts):
+    """Number of connected pieces (union-find over vertices sharing a triangle).
+    A watertight mesh can still be several DISCONNECTED closed shells -- e.g. a
+    hole pattern that severs the wall into floating islands -- which prints as
+    loose confetti. Only 1 component is a real single printable part."""
+    if len(faces) == 0:
+        return 0
+    parent = np.arange(nverts, dtype=np.int64)
+
+    def find(a):
+        root = a
+        while parent[root] != root:
+            root = parent[root]
+        while parent[a] != root:            # path-compress
+            parent[a], a = root, parent[a]
+        return root
+
+    for tri in faces:
+        a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
+        ra, rb, rc = find(a), find(b), find(c)
+        if rb != ra:
+            parent[rb] = ra
+        if rc != ra:
+            parent[rc] = ra
+    used = np.unique(faces.reshape(-1))
+    roots = {find(int(x)) for x in used}
+    return len(roots)
 
 
 def min_wall_ok(params):
@@ -622,6 +676,7 @@ def _base_dims(params, shade_params):
     bayonet so the two parts actually mate."""
     b = dict(BASE_DEFAULTS); b.update({k: params[k] for k in params if k in BASE_DEFAULTS})
     sp = dict(SHADE_DEFAULTS); sp.update(shade_params or {})
+    sp.update(_form_params(shade_params or {}))    # resolve graph/stack form -> mate the parts
     g = bayonet_geometry(sp)
     d = dict(b)
     d["collar_r"] = g["base_collar_r"]                 # collar outer radius
