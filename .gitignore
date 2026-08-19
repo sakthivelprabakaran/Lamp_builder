@@ -1,0 +1,5 @@
+output/
+screenshots/
+*.log
+__pycache__/
+*.pyc

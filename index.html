@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lamp Studio</title>
+<style>
+  :root{ --bg:#14161a; --panel:#1c1f26; --line:#2a2e38; --txt:#e6e8ee; --mut:#9aa2b1;
+         --accent:#f5a623; --accent2:#4aa3ff; --ok:#39d98a; --warn:#ffcf5c; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; height:100vh; display:flex; font:13px/1.4 system-ui,Segoe UI,Roboto,sans-serif;
+        background:var(--bg); color:var(--txt); overflow:hidden; }
+  #panel{ width:340px; flex:0 0 340px; background:var(--panel); border-right:1px solid var(--line);
+          display:flex; flex-direction:column; }
+  #head{ padding:12px 14px; border-bottom:1px solid var(--line); }
+  #head h1{ margin:0; font-size:15px; letter-spacing:.5px; }
+  #head h1 span{ color:var(--accent); }
+  #head .sub{ color:var(--mut); font-size:11px; margin-top:3px; }
+  #controls{ flex:1; overflow-y:auto; padding:8px 12px 20px; }
+  .grp{ border:1px solid var(--line); border-radius:8px; margin:8px 0; overflow:hidden; }
+  .grp>summary{ list-style:none; cursor:pointer; padding:8px 10px; background:#20242d;
+                font-weight:600; font-size:12px; user-select:none; }
+  .grp>summary::-webkit-details-marker{ display:none; }
+  .grp[open]>summary{ border-bottom:1px solid var(--line); }
+  .body{ padding:8px 10px; }
+  .row{ margin:8px 0; }
+  .row label{ display:flex; justify-content:space-between; color:var(--mut); font-size:11px; margin-bottom:3px; }
+  .row label b{ color:var(--txt); font-weight:600; }
+  input[type=range]{ width:100%; accent-color:var(--accent); }
+  select,input[type=text]{ width:100%; background:#0f1116; color:var(--txt);
+        border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+  #foot{ border-top:1px solid var(--line); padding:10px 12px; display:flex; flex-direction:column; gap:8px; }
+  .btnrow{ display:flex; gap:8px; }
+  button{ flex:1; cursor:pointer; border:1px solid var(--line); background:#232833; color:var(--txt);
+          border-radius:7px; padding:9px; font-size:12px; font-weight:600; }
+  button:hover{ border-color:var(--accent2); }
+  button.primary{ background:var(--accent); color:#1a1206; border-color:var(--accent); }
+  button.alt{ background:#2a3340; }
+  #view{ flex:1; position:relative; }
+  #cv{ width:100%; height:100%; display:block; }
+  #hud{ position:absolute; top:10px; left:12px; font-size:11px; color:var(--mut);
+        background:rgba(20,22,26,.7); padding:6px 9px; border-radius:6px; pointer-events:none; }
+  #warn{ position:absolute; bottom:10px; left:12px; right:12px; font-size:11px; color:#1a1206;
+         background:var(--warn); padding:7px 10px; border-radius:6px; display:none; }
+  #busy{ position:absolute; top:10px; right:12px; font-size:11px; color:var(--accent);
+         background:rgba(20,22,26,.8); padding:6px 9px; border-radius:6px; display:none; }
+  .seg{ display:flex; gap:4px; margin:6px 0; }
+  .seg button{ padding:6px; font-size:11px; font-weight:500; }
+  .seg button.on{ background:var(--accent2); color:#04121f; border-color:var(--accent2); }
+  .tiny{ color:var(--mut); font-size:10px; margin-top:2px; }
+  /* operator stack */
+  #stackpanel{ border:1px solid var(--accent); border-radius:8px; margin:8px 0; overflow:hidden; }
+  #stackpanel>.hd{ padding:8px 10px; background:#241f14; font-weight:600; font-size:12px;
+                   display:flex; justify-content:space-between; align-items:center; }
+  #stackpanel>.hd span{ color:var(--accent); }
+  .opcard{ border-top:1px solid var(--line); background:#191c22; }
+  .opcard .ophd{ display:flex; align-items:center; gap:6px; padding:6px 9px; cursor:pointer;
+                 user-select:none; font-size:12px; }
+  .opcard .ophd .nm{ font-weight:600; flex:1; text-transform:capitalize; }
+  .opcard.off .nm{ color:var(--mut); text-decoration:line-through; }
+  .opcard .ophd button{ flex:0 0 auto; width:24px; padding:3px 0; font-size:12px; background:#242a34; }
+  .opcard .opbody{ padding:2px 10px 8px; }
+  .opadd{ padding:8px 10px; display:flex; gap:6px; }
+  .opadd select{ flex:1; }
+  .opadd button{ flex:0 0 70px; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div id="head">
+    <h1>LAMP <span>STUDIO</span></h1>
+    <div class="sub">parametric shade + base &bull; build123d</div>
+  </div>
+  <div id="controls"></div>
+  <div id="foot">
+    <div class="row" style="margin:0">
+      <label>Preset</label>
+      <select id="presetSel"><option value="">— load preset —</option></select>
+    </div>
+    <div class="btnrow">
+      <input type="text" id="presetName" placeholder="preset name">
+      <button class="alt" id="savePreset" style="flex:0 0 90px">Save</button>
+    </div>
+    <div class="btnrow">
+      <button class="primary" id="exportShade">Export shade STL</button>
+    </div>
+    <div class="btnrow">
+      <button class="alt" id="genBase">Generate base</button>
+      <button class="alt" id="genTestfit" style="flex:0 0 120px">Test-fit ring</button>
+    </div>
+  </div>
+</div>
+
+<div id="view">
+  <canvas id="cv"></canvas>
+  <div id="hud">drag to orbit &bull; scroll to zoom</div>
+  <div id="busy">working…</div>
+  <div id="warn"></div>
+  <div style="position:absolute;top:8px;left:50%;transform:translateX(-50%)">
+    <div class="seg" id="showSeg">
+      <button data-show="shade" class="on">Shade</button>
+      <button data-show="base">Base</button>
+      <button data-show="both">Both</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---- control schema (label, key, min, max, step, group) ------------------
+const SHADE_CTRL = [
+  ['Shade','height','Height',80,320,1],
+  ['Shade','wall','Wall thickness',0.6,2.5,0.1],
+  ['Quality','res_theta','Around res',60,300,10],
+  ['Quality','res_z','Vertical res',40,260,10],
+  ['Perforation','pat_cols','Cells around',4,40,1],
+  ['Perforation','pat_rows','Cells up',3,30,1],
+  ['Perforation','web','Web / hole size',0.08,0.6,0.01],
+  ['Perforation','pat_seed','Voronoi seed',1,50,1],
+  ['Perforation','top_solid','Top solid band',0,40,1],
+  ['Twist-lock','bayonet','Enable (0/1)',0,1,1],
+  ['Twist-lock','collar_h','Collar height',10,30,1],
+  ['Twist-lock','collar_wall','Collar wall',3,8,0.5],
+  ['Twist-lock','lug_count','Lug count',2,6,1],
+  ['Twist-lock','channel_w_deg','Channel width°',10,30,1],
+  ['Twist-lock','lock_w_deg','Lock travel°',20,70,1],
+  ['Twist-lock','lug_protr','Lug protrusion',1,4,0.1],
+  ['Twist-lock','fit_clr','Fit clearance',0.2,1.2,0.1],
+  ['Twist-lock','pocket_z0','Pocket floor',4,14,0.5],
+  ['Twist-lock','pocket_h','Pocket height',3,8,0.5],
+];
+const BASE_CTRL = [
+  ['Base','rim_over','Rim overhang',0,12,0.5],
+  ['Base','plate_thick','Plate thick',3,10,0.5],
+  ['Base','seat_wall','Collar wall',2,6,0.5],
+  ['Base','seat_extra','Collar extra',3,15,0.5],
+  ['Holder','bore','Centre bore',6,16,0.5],
+  ['Holder','nut_dia','M10 nut pocket',14,24,0.5],
+  ['Holder','nut_depth','Nut depth',2,8,0.5],
+  ['Holder','holder_dia','Holder recess Ø',30,60,0.5],
+  ['Holder','holder_depth','Recess depth',3,10,0.5],
+  ['Holder','screw_spacing','Screw pitch',15,45,1],
+  ['Holder','screw_dia','Screw Ø',2.5,5,0.1],
+  ['Holder','cord_slot','Cord slot',0,10,0.5],
+];
+
+let defaults = {shade:{}, base:{}};
+const shade = {}, base = {};
+window.LS = { shade, base };   // live-state hook for headless verification
+
+// ---- three.js scene -------------------------------------------------------
+const cv = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x14161a);
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 5000);
+camera.position.set(260, 180, 320);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x33373f, 1.1));
+const dl = new THREE.DirectionalLight(0xffffff, 1.3); dl.position.set(1,2,1.5); scene.add(dl);
+const grid = new THREE.GridHelper(600, 24, 0x2a2e38, 0x22252d);
+scene.add(grid);
+// A warm "bulb" so translucency reads.
+const bulb = new THREE.PointLight(0xffdba0, 40, 600, 1.5);
+scene.add(bulb);
+
+const shadeMat = new THREE.MeshStandardMaterial({color:0xf3e6cf, roughness:.6, metalness:0,
+  side:THREE.DoubleSide, transparent:true, opacity:.92});
+const baseMat = new THREE.MeshStandardMaterial({color:0x8b939f, roughness:.5, metalness:.2,
+  side:THREE.DoubleSide});
+let shadeMesh=null, baseMesh=null, showMode='shade';
+
+function fitCamera(){
+  const box = new THREE.Box3();
+  if(shadeMesh && (showMode!=='base')) box.expandByObject(shadeMesh);
+  if(baseMesh && (showMode!=='shade')) box.expandByObject(baseMesh);
+  if(box.isEmpty()) return;
+  const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+  controls.target.copy(c); bulb.position.set(c.x, c.y, c.z);
+  const r = Math.max(s.x,s.y,s.z);
+  camera.position.set(c.x + r*1.2, c.y + r*0.7, c.z + r*1.6);
+}
+
+function setVisibility(){
+  if(shadeMesh) shadeMesh.visible = (showMode!=='base');
+  if(baseMesh)  baseMesh.visible  = (showMode!=='shade');
+  // In the combined view the shade rests on the base plate; lift it so the
+  // base collar seats inside the shade's twist-lock collar.
+  if(shadeMesh) shadeMesh.position.z = (showMode==='both' && baseMesh)
+      ? (parseFloat(base.plate_thick)||0) : 0;
+}
+
+function resize(){
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if(cv.width!==w||cv.height!==h){ renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix(); }
+}
+(function loop(){ resize(); controls.update(); renderer.render(scene,camera); requestAnimationFrame(loop); })();
+
+// ---- operator stack -------------------------------------------------------
+let opSchema = {};                     // {type:[[key,label,min,max,step],...]}
+function renderStack(){
+  const host = document.getElementById('stackpanel'); if(!host) return;
+  host.innerHTML = `<div class="hd"><span>◆ SHAPE</span><span style="color:var(--mut);font-weight:400">operators run top → bottom</span></div>`;
+  (shade.stack||[]).forEach((op,i)=>{
+    const card = document.createElement('div'); card.className='opcard'+(op.on?'':' off');
+    const isForm = op.type==='form';
+    const ctrls = (i>0? `<button title="up" data-a="up" data-i="${i}">▲</button>
+                         <button title="down" data-a="down" data-i="${i}">▼</button>
+                         <button title="remove" data-a="del" data-i="${i}">✕</button>`:'');
+    card.innerHTML = `<div class="ophd">
+        <input type="checkbox" data-a="mute" data-i="${i}" ${op.on?'checked':''}>
+        <span class="nm">${op.type}</span>${ctrls}</div>
+      <div class="opbody"></div>`;
+    const body = card.querySelector('.opbody');
+    (opSchema[op.type]||[]).forEach(([key,label,mn,mx,st])=>{
+      if(op[key]===undefined) op[key]=mn;
+      const row=document.createElement('div'); row.className='row';
+      row.innerHTML=`<label>${label} <b>${fmt(op[key])}</b></label>
+        <input type="range" min="${mn}" max="${mx}" step="${st}" value="${op[key]}">`;
+      const inp=row.querySelector('input'), val=row.querySelector('b');
+      inp.addEventListener('input',()=>{ op[key]=parseFloat(inp.value); val.textContent=fmt(op[key]); scheduleShade(); });
+      body.appendChild(row);
+    });
+    host.appendChild(card);
+  });
+  // add-operator row
+  const addrow=document.createElement('div'); addrow.className='opadd';
+  addrow.innerHTML=`<select id="opadd_sel">${Object.keys(opSchema).filter(t=>t!=='form').map(t=>`<option value="${t}">${t}</option>`).join('')}</select><button id="opadd_btn">+ Add</button>`;
+  host.appendChild(addrow);
+  host.querySelectorAll('.ophd button').forEach(bt=> bt.onclick=(e)=>{ e.stopPropagation(); stackAction(bt.dataset.a, +bt.dataset.i); });
+  host.querySelectorAll('input[data-a="mute"]').forEach(cb=> cb.onchange=()=>{ shade.stack[+cb.dataset.i].on = cb.checked?1:0; renderStack(); scheduleShade(); });
+  document.getElementById('opadd_btn').onclick=()=>{
+    const t=document.getElementById('opadd_sel').value;
+    const op={type:t,on:1}; (opSchema[t]||[]).forEach(([k,l,mn])=>op[k]=mn);
+    shade.stack.push(op); renderStack(); scheduleShade();
+  };
+}
+function stackAction(a,i){
+  const s=shade.stack;
+  if(a==='del'){ if(s[i].type!=='form') s.splice(i,1); }
+  else if(a==='up'&&i>1){ [s[i-1],s[i]]=[s[i],s[i-1]]; }
+  else if(a==='down'&&i<s.length-1&&i>=1){ [s[i+1],s[i]]=[s[i],s[i+1]]; }
+  renderStack(); scheduleShade();
+}
+
+// ---- UI build -------------------------------------------------------------
+function buildControls(){
+  const host = document.getElementById('controls');
+  host.innerHTML='<div id="stackpanel"></div>';
+  renderStack();
+  const groups = {};
+  const order = [];
+  function add(ctrl, store){
+    ctrl.forEach(([g,key,label,min,max,step])=>{
+      if(!groups[g]){ groups[g]=[]; order.push(g); }
+      groups[g].push({key,label,min,max,step,store});
+    });
+  }
+  add(SHADE_CTRL, shade); add(BASE_CTRL, base);
+  order.forEach(g=>{
+    const det = document.createElement('details'); det.className='grp';
+    det.open = !['Quality','Base','Organic','Holder','Twist-lock'].includes(g);
+    det.innerHTML = `<summary>${g}</summary>`;
+    const body = document.createElement('div'); body.className='body';
+    if(g==='Perforation'){  // pattern is a dropdown, not a slider
+      const row = document.createElement('div'); row.className='row';
+      row.innerHTML = `<label>Pattern</label>
+        <select id="sel_pattern">
+          <option value="none">None (solid wall)</option>
+          <option value="dots">Perforated dots (round holes)</option>
+          <option value="honeycomb">Honeycomb (hexagons)</option>
+          <option value="voronoi">Voronoi (organic)</option>
+          <option value="gyroid">Gyroid (wavy struts)</option>
+          <option value="grid">Grid (square holes)</option>
+        </select>
+        <div class="tiny">Holes are cut through the wall and sealed watertight. Collar + top band stay solid.</div>`;
+      body.appendChild(row);
+    }
+    if(g==='Holder'){       // holder-type is a dropdown, not a slider
+      const row = document.createElement('div'); row.className='row';
+      row.innerHTML = `<label>Holder type</label>
+        <select id="sel_holder_type">
+          <option value="m10">M10 nipple (universal)</option>
+          <option value="b22">B22 holder (recess + 2 screws)</option>
+          <option value="e27">E27 holder (recess)</option>
+          <option value="ikea">IKEA cord set (recess)</option>
+        </select>
+        <div class="tiny">Dimensions are nominal — print a test-fit ring to check your real holder.</div>`;
+      body.appendChild(row);
+    }
+    groups[g].forEach(c=>{
+      const row = document.createElement('div'); row.className='row';
+      row.innerHTML = `<label>${c.label} <b id="v_${c.key}"></b></label>
+        <input type="range" id="r_${c.key}" min="${c.min}" max="${c.max}" step="${c.step}">`;
+      body.appendChild(row);
+    });
+    det.appendChild(body); host.appendChild(det);
+    groups[g].forEach(c=>{
+      const r = document.getElementById('r_'+c.key), v = document.getElementById('v_'+c.key);
+      r.value = c.store[c.key];
+      v.textContent = fmt(c.store[c.key]);
+      const isBase = BASE_CTRL.some(x=>x[1]===c.key);
+      r.addEventListener('input', ()=>{
+        c.store[c.key] = parseFloat(r.value); v.textContent = fmt(c.store[c.key]);
+        if(isBase){ scheduleBase(); } else { scheduleShade(); }
+      });
+    });
+  });
+  const hsel = document.getElementById('sel_holder_type');
+  if(hsel){ hsel.value = base.holder_type || 'm10';
+    hsel.addEventListener('change', ()=>{ base.holder_type = hsel.value; scheduleBase(); }); }
+  const psel = document.getElementById('sel_pattern');
+  if(psel){ psel.value = shade.pattern || 'none';
+    psel.addEventListener('change', ()=>{ shade.pattern = psel.value; scheduleShade(); }); }
+}
+function fmt(n){ return (Math.round(n*100)/100).toString(); }
+function syncSliders(){
+  [...SHADE_CTRL,...BASE_CTRL].forEach(([g,key])=>{
+    const r=document.getElementById('r_'+key), v=document.getElementById('v_'+key);
+    const store = SHADE_CTRL.some(x=>x[1]===key)?shade:base;
+    if(r){ r.value=store[key]; v.textContent=fmt(store[key]); }
+  });
+  const hsel = document.getElementById('sel_holder_type');
+  if(hsel && base.holder_type) hsel.value = base.holder_type;
+  const psel = document.getElementById('sel_pattern');
+  if(psel && shade.pattern) psel.value = shade.pattern;
+}
+
+// ---- networking -----------------------------------------------------------
+const busy = document.getElementById('busy'), warnBox = document.getElementById('warn');
+function setBusy(on){ busy.style.display = on?'block':'none'; }
+function showWarn(list){
+  if(list && list.length){ warnBox.textContent = '⚠ '+list.join('  '); warnBox.style.display='block'; }
+  else warnBox.style.display='none';
+}
+let shadeTimer=null, inflight=false, pending=false, baseDirty=true, inflightBase=false, baseTimer=null;
+function scheduleShade(){ clearTimeout(shadeTimer); shadeTimer=setTimeout(runShade,120); }
+// Base rebuilds are ~1s (build123d). Regenerate live only while the base is on
+// screen; otherwise just mark it stale so it rebuilds when you switch to it.
+function scheduleBase(){
+  baseDirty=true;
+  if(showMode==='base'||showMode==='both'){
+    clearTimeout(baseTimer);
+    baseTimer=setTimeout(()=>{ if(!inflightBase) genBase(false); }, 300);
+  }
+}
+
+async function runShade(){
+  if(inflight){ pending=true; return; }
+  inflight=true; setBusy(true);
+  try{
+    const r = await fetch('/api/shade',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({params:shade})});
+    const d = await r.json();
+    if(d.ok){ applyShadeGeom(d.vertices, d.indices); showWarn(d.warnings);
+      hud(`shade ${d.metrics.tris.toLocaleString()} tris`); }
+    else showWarn([d.error||'shade failed']);
+  }catch(e){ showWarn([''+e]); }
+  finally{ inflight=false; setBusy(false); if(pending){ pending=false; runShade(); } }
+}
+function applyShadeGeom(vertices, indices){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(vertices,3));
+  g.setIndex(indices); g.computeVertexNormals();
+  if(shadeMesh){ shadeMesh.geometry.dispose(); shadeMesh.geometry=g; }
+  else { shadeMesh = new THREE.Mesh(g, shadeMat); scene.add(shadeMesh); fitCamera(); }
+  setVisibility();
+  g.computeBoundingBox(); const bb=g.boundingBox, s=bb.getSize(new THREE.Vector3());
+  window.__shade = {tris: indices.length/3, bbox:[+s.x.toFixed(2),+s.y.toFixed(2),+s.z.toFixed(2)]};
+}
+function hud(t){ document.getElementById('hud').textContent = t+'  •  drag / scroll'; }
+
+async function genBase(dl){
+  if(inflightBase) return;
+  inflightBase=true; setBusy(true);
+  try{
+    const r = await fetch('/api/base',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({params:base, shade_params:shade, export:true})});
+    const d = await r.json();
+    if(d.ok){ applyBaseGeom(d.positions); baseDirty=false;
+      hud(`base ${d.metrics.triangles.toLocaleString()} tris • ${d.metrics.volume_mm3} mm³`);
+      if(dl!==false) download('/download/base.stl'); }
+    else showWarn([d.error||'base failed']);
+  }catch(e){ showWarn([''+e]); }
+  finally{ inflightBase=false; setBusy(false); }
+}
+function applyBaseGeom(pos){
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.computeVertexNormals();
+  if(baseMesh){ baseMesh.geometry.dispose(); baseMesh.geometry=g; }
+  else { baseMesh = new THREE.Mesh(g, baseMat); scene.add(baseMesh); }
+  setVisibility(); fitCamera();
+  window.__base = {verts: pos.length/3};
+}
+
+async function genTestfit(){
+  setBusy(true);
+  try{
+    const r = await fetch('/api/testfit',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({params:base, shade_params:shade, export:true})});
+    const d = await r.json();
+    if(d.ok){ hud(`test-fit ring for "${base.holder_type}" • ${d.metrics.triangles.toLocaleString()} tris`);
+      download('/download/testfit.stl'); showWarn(['Test-fit ring downloaded — print it and check your real holder fits.']); }
+    else showWarn([d.error||'test-fit failed']);
+  }catch(e){ showWarn([''+e]); }
+  finally{ setBusy(false); }
+}
+
+async function exportShade(){
+  setBusy(true);
+  try{
+    const r = await fetch('/api/export_shade',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({params:shade})});
+    const d = await r.json();
+    showWarn(d.warnings);
+    if(d.ok){ hud(`exported ${d.metrics.tris.toLocaleString()} tris • watertight ${d.metrics.watertight}`);
+      download('/download/shade.stl'); }
+    else showWarn([d.error||'export failed']);
+  }catch(e){ showWarn([''+e]); }
+  finally{ setBusy(false); }
+}
+function download(url){ const a=document.createElement('a'); a.href=url; a.download=''; a.click(); }
+
+// ---- presets --------------------------------------------------------------
+async function loadPresetList(){
+  const r = await fetch('/api/presets'); const d = await r.json();
+  const sel = document.getElementById('presetSel');
+  sel.innerHTML = '<option value="">— load preset —</option>';
+  (d.presets||[]).forEach(n=>{ const o=document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o); });
+}
+function stackFromFlat(s){   // rebuild a stack from a legacy (pre-stack) preset
+  return [
+    {type:'form',on:1,r_bottom:s.r_bottom??70,r_top:s.r_top??55,bulge:s.bulge??0,bulge_pos:s.bulge_pos??0.5},
+    {type:'twist',on:1,turns:s.twist_turns??0},
+    {type:'flute',on:(s.lobes&&s.lobe_amp)?1:0,count:s.lobes??8,amp:s.lobe_amp??0.1},
+    {type:'ripple',on:(s.ripple_waves&&s.ripple_amp)?1:0,waves:s.ripple_waves??0,amp:s.ripple_amp??0},
+    {type:'noise',on:s.noise_amp?1:0,amp:s.noise_amp??0,scale:s.noise_scale??6,seed:s.seed??1},
+  ];
+}
+async function loadPreset(name){
+  if(!name) return;
+  const r = await fetch('/api/preset/'+encodeURIComponent(name)); const d = await r.json();
+  const s = d.shade||{};
+  shade.stack = Array.isArray(s.stack) ? s.stack : stackFromFlat(s);
+  Object.assign(shade, s); Object.assign(base, d.base||{});
+  syncSliders(); renderStack(); baseDirty=true; runShade();
+}
+async function savePreset(){
+  const name = document.getElementById('presetName').value.trim();
+  if(!name){ showWarn(['Enter a preset name first.']); return; }
+  const r = await fetch('/api/preset/save',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name, shade, base})});
+  const d = await r.json();
+  if(d.ok){ await loadPresetList(); document.getElementById('presetSel').value=d.name; showWarn([]); }
+  else showWarn([d.error||'save failed']);
+}
+
+// ---- show toggle ----------------------------------------------------------
+function setShow(mode){
+  showMode=mode;
+  document.querySelectorAll('#showSeg button').forEach(b=>b.classList.toggle('on', b.dataset.show===mode));
+  setVisibility(); fitCamera();
+  // The toggle only changes visibility; if the base has never been built (or is
+  // stale after a param change) generate it now so the view isn't empty.
+  if((mode==='base'||mode==='both') && (!baseMesh || baseDirty) && !inflightBase){
+    hud('building base…'); genBase(false);
+  }
+}
+document.querySelectorAll('#showSeg button').forEach(b=> b.onclick=()=>setShow(b.dataset.show));
+document.getElementById('exportShade').onclick = exportShade;
+document.getElementById('genBase').onclick = ()=>genBase(true);
+document.getElementById('genTestfit').onclick = genTestfit;
+document.getElementById('savePreset').onclick = savePreset;
+document.getElementById('presetSel').onchange = e=> loadPreset(e.target.value);
+
+// ---- init -----------------------------------------------------------------
+(async function init(){
+  const r = await fetch('/api/defaults'); defaults = await r.json();
+  Object.assign(shade, defaults.shade); Object.assign(base, defaults.base);
+  opSchema = defaults.op_schema || {};
+  shade.stack = JSON.parse(JSON.stringify(defaults.stack_default || []));
+  buildControls();
+  await loadPresetList();
+  runShade();
+})();
+</script>
+</body>
+</html>
