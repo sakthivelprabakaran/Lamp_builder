@@ -1,0 +1,10 @@
+1) initial gmode : stack | shade tris: 99840
+2) graph mode    : cards=4 wires=4 drawer=flex tris=99840
+   node types    : ['form', 'voronoi', 'displace', 'output']
+3) after +gyroid : cards=5 (was 4)
+4) voronoi param : changed=True tris 99840 -> 88536 (regened)
+5) back to stack : gmode=stack drawer=none tris=88536
+
+pageerrors: none
+console errors/warnings: none
+shots: ['p6_01_graph.png', 'p6_02_edited.png']

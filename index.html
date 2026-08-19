@@ -63,6 +63,46 @@
   .opadd{ padding:8px 10px; display:flex; gap:6px; }
   .opadd select{ flex:1; }
   .opadd button{ flex:0 0 70px; }
+  /* shape-source toggle + node graph (Phase 6) */
+  #shapemode{ padding:8px 12px 0; }
+  #shapemode .seg button.on{ background:var(--accent); color:#1a1206; border-color:var(--accent); }
+  body.graphmode #stackpanel{ display:none; }
+  body.graphmode .grp[data-group="Perforation"]{ display:none; }  /* graph drives holes */
+  #ndrawer{ position:absolute; left:0; right:0; bottom:0; height:50%; display:none;
+            background:rgba(15,17,21,.97); border-top:2px solid var(--accent); flex-direction:column; z-index:5; }
+  #ndrawer.on{ display:flex; }
+  #ndbar{ display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--line);
+          font-size:11px; color:var(--mut); }
+  #ndbar b{ color:var(--accent); }
+  #ndbar select{ width:auto; flex:0 0 auto; padding:4px 6px; }
+  #ndbar button{ flex:0 0 auto; padding:5px 10px; }
+  #ndbar .sp{ flex:1; }
+  #ncanvas{ position:relative; flex:1; overflow:hidden; cursor:grab; }
+  #ncanvas.grabbing{ cursor:grabbing; }
+  #nworld{ position:absolute; left:0; top:0; transform:translate(0px,0px); }
+  #nwires{ position:absolute; left:-2000px; top:-2000px; width:8000px; height:6000px;
+           pointer-events:none; overflow:visible; }
+  .ncard{ position:absolute; width:160px; background:#1c212b; border:1px solid var(--line);
+          border-radius:8px; box-shadow:0 3px 12px rgba(0,0,0,.45); font-size:11px; }
+  .ncard.sel{ border-color:var(--accent2); }
+  .ncard .nh{ display:flex; align-items:center; gap:4px; padding:5px 8px; cursor:move;
+              border-radius:8px 8px 0 0; font-weight:600; color:var(--txt); }
+  .ncard.cat-generator .nh{ background:#243447; }
+  .ncard.cat-math .nh{ background:#2c2740; }
+  .ncard.cat-warp .nh{ background:#1f3a34; }
+  .ncard.cat-terminal .nh{ background:#3a2f1c; }
+  .ncard .nh .x{ margin-left:auto; cursor:pointer; opacity:.55; padding:0 2px; }
+  .ncard .nh .x:hover{ opacity:1; }
+  .ncard .nb{ padding:4px 8px 8px; }
+  .ncard .prow{ margin:5px 0; }
+  .ncard .prow label{ display:flex; justify-content:space-between; color:var(--mut); font-size:10px; }
+  .ncard .prow label b{ color:var(--txt); }
+  .ncard input[type=range]{ width:100%; accent-color:var(--accent); }
+  .port{ position:absolute; width:12px; height:12px; border-radius:50%; background:#0f1116;
+         border:2px solid var(--accent2); cursor:crosshair; z-index:2; }
+  .port.out{ border-color:var(--accent); }
+  .port.filled{ background:var(--accent2); }
+  .plabel{ position:absolute; font-size:9px; color:var(--mut); white-space:nowrap; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -70,6 +110,13 @@
   <div id="head">
     <h1>LAMP <span>STUDIO</span></h1>
     <div class="sub">parametric shade + base &bull; build123d</div>
+  </div>
+  <div id="shapemode">
+    <div class="seg">
+      <button data-mode="stack" class="on">◆ Stack</button>
+      <button data-mode="graph">⬡ Node graph</button>
+    </div>
+    <div class="tiny">Node graph = Grasshopper-style field patterns (opens below the view)</div>
   </div>
   <div id="controls"></div>
   <div id="foot">
@@ -102,6 +149,17 @@
       <button data-show="base">Base</button>
       <button data-show="both">Both</button>
     </div>
+  </div>
+  <div id="ndrawer">
+    <div id="ndbar">
+      <b>⬡ FIELD NODE GRAPH</b>
+      <select id="naddSel"></select>
+      <button id="naddBtn">+ Add node</button>
+      <button id="nfit">Fit</button>
+      <span class="sp"></span>
+      <span id="nhint">drag a node header to move • drag from an output ● to an input ○ to wire • click a wired input to disconnect</span>
+    </div>
+    <div id="ncanvas"><div id="nworld"><svg id="nwires"></svg></div></div>
   </div>
 </div>
 
@@ -152,7 +210,7 @@ const BASE_CTRL = [
 
 let defaults = {shade:{}, base:{}};
 const shade = {}, base = {};
-window.LS = { shade, base };   // live-state hook for headless verification
+window.LS = { shade, base, get graph(){ return NG.graph; }, get gmode(){ return NG.mode; } };  // headless-verify hook
 
 // ---- three.js scene -------------------------------------------------------
 const cv = document.getElementById('cv');
@@ -265,7 +323,7 @@ function buildControls(){
   }
   add(SHADE_CTRL, shade); add(BASE_CTRL, base);
   order.forEach(g=>{
-    const det = document.createElement('details'); det.className='grp';
+    const det = document.createElement('details'); det.className='grp'; det.dataset.group=g;
     det.open = !['Quality','Base','Organic','Holder','Twist-lock'].includes(g);
     det.innerHTML = `<summary>${g}</summary>`;
     const body = document.createElement('div'); body.className='body';
@@ -451,7 +509,11 @@ async function loadPreset(name){
   const s = d.shade||{};
   shade.stack = Array.isArray(s.stack) ? s.stack : stackFromFlat(s);
   Object.assign(shade, s); Object.assign(base, d.base||{});
-  syncSliders(); renderStack(); baseDirty=true; runShade();
+  syncSliders(); renderStack(); baseDirty=true;
+  if(s.graph && s.graph.nodes){          // graph preset -> restore node graph + mode
+    NG.graph = JSON.parse(JSON.stringify(s.graph)); setMode('graph'); return;
+  }
+  delete shade.graph; setMode('stack');
 }
 async function savePreset(){
   const name = document.getElementById('presetName').value.trim();
@@ -481,6 +543,172 @@ document.getElementById('genTestfit').onclick = genTestfit;
 document.getElementById('savePreset').onclick = savePreset;
 document.getElementById('presetSel').onchange = e=> loadPreset(e.target.value);
 
+// ---- field node graph (Phase 6) -------------------------------------------
+const NG = { reg:{}, graph:{nodes:[],edges:[]}, mode:'stack', pan:{x:40,y:20}, uid:1 };
+const W = 160, HEADER = 24, P0 = 30, PSTEP = 20;   // card geometry (matches CSS)
+const $c = ()=>document.getElementById('ncanvas');
+const $w = ()=>document.getElementById('nworld');
+const $svg = ()=>document.getElementById('nwires');
+
+function scheduleGraph(){ if(NG.mode==='graph'){ shade.graph = NG.graph; scheduleShade(); } }
+function newId(t){ return t+'_'+(NG.uid++); }
+function portY(i){ return P0 + i*PSTEP; }
+function outAnchor(n){ return {x:n.x+W, y:n.y+P0}; }
+function inAnchor(n,i){ return {x:n.x, y:n.y+portY(i)}; }
+function nodeById(id){ return NG.graph.nodes.find(n=>n.id===id); }
+function edgeInto(id,port){ return NG.graph.edges.find(e=>e.to===id&&e.toPort===port); }
+
+function setMode(m){
+  NG.mode=m;
+  document.querySelectorAll('#shapemode .seg button').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
+  document.body.classList.toggle('graphmode', m==='graph');
+  document.getElementById('ndrawer').classList.toggle('on', m==='graph');
+  if(m==='graph'){ shade.graph = NG.graph; renderGraph(); }
+  else { delete shade.graph; }
+  runShade();
+}
+
+function buildAddMenu(){
+  const sel=document.getElementById('naddSel'); if(!sel) return;
+  const cats={}; Object.entries(NG.reg).forEach(([k,s])=>{ if(k==='output')return;
+    (cats[s.category]=cats[s.category]||[]).push([k,s.label]); });
+  sel.innerHTML='';
+  Object.keys(cats).sort().forEach(cat=>{
+    const og=document.createElement('optgroup'); og.label=cat;
+    cats[cat].sort((a,b)=>a[1].localeCompare(b[1])).forEach(([k,l])=>{
+      const o=document.createElement('option'); o.value=k; o.textContent=l; og.appendChild(o); });
+    sel.appendChild(og);
+  });
+}
+
+function renderGraph(){
+  const world=$w(); if(!world) return;
+  [...world.querySelectorAll('.ncard')].forEach(e=>e.remove());
+  world.style.transform=`translate(${NG.pan.x}px,${NG.pan.y}px)`;
+  NG.graph.nodes.forEach(makeCard);
+  renderWires();
+}
+
+function makeCard(n){
+  const spec=NG.reg[n.type]; if(!spec) return;
+  const card=document.createElement('div');
+  card.className='ncard cat-'+spec.category; card.style.left=n.x+'px'; card.style.top=n.y+'px';
+  card.dataset.id=n.id;
+  const canDel = n.type!=='output';
+  card.innerHTML=`<div class="nh">${spec.label}${canDel?'<span class="x" title="delete">✕</span>':''}</div><div class="nb"></div>`;
+  const nb=card.querySelector('.nb');
+  // input ports + labels
+  (spec.inputs||[]).forEach((port,i)=>{
+    const dot=document.createElement('div');
+    dot.className='port in'+(edgeInto(n.id,port)?' filled':'');
+    dot.style.left='-6px'; dot.style.top=(portY(i)-6)+'px';
+    dot.dataset.node=n.id; dot.dataset.port=port; dot.dataset.kind='in';
+    const lab=document.createElement('div'); lab.className='plabel';
+    lab.style.left='10px'; lab.style.top=(portY(i)-6)+'px'; lab.textContent=port;
+    card.appendChild(dot); card.appendChild(lab);
+  });
+  // output port (single) for every node except output
+  if(n.type!=='output'){
+    const od=document.createElement('div'); od.className='port out';
+    od.style.right='-6px'; od.style.top=(P0-6)+'px';
+    od.dataset.node=n.id; od.dataset.kind='out'; card.appendChild(od);
+  }
+  // params
+  (spec.params||[]).forEach(pp=>{
+    n.params=n.params||{}; if(n.params[pp.key]===undefined) n.params[pp.key]=pp.def;
+    const row=document.createElement('div'); row.className='prow';
+    row.innerHTML=`<label>${pp.label} <b>${fmt(n.params[pp.key])}</b></label>
+      <input type="range" min="${pp.min}" max="${pp.max}" step="${pp.step}" value="${n.params[pp.key]}">`;
+    const inp=row.querySelector('input'), val=row.querySelector('b');
+    inp.addEventListener('input',()=>{ n.params[pp.key]=parseFloat(inp.value); val.textContent=fmt(n.params[pp.key]); scheduleGraph(); });
+    nb.appendChild(row);
+  });
+  // header: drag to move + delete
+  const head=card.querySelector('.nh');
+  head.addEventListener('mousedown',e=>{ if(e.target.classList.contains('x'))return; startNodeDrag(e,n,card); });
+  const x=card.querySelector('.x'); if(x) x.addEventListener('click',()=>delNode(n.id));
+  // ports: start / end wiring
+  card.querySelectorAll('.port').forEach(pt=>{
+    pt.addEventListener('mousedown',e=>{ e.stopPropagation();
+      if(pt.dataset.kind==='out') startWire(e,n.id);
+      else { const ex=edgeInto(n.id,pt.dataset.port); if(ex){ removeEdge(ex); } } });
+  });
+  $w().appendChild(card);
+}
+
+function bez(a,b){ const dx=Math.max(40,Math.abs(b.x-a.x)*0.5);
+  return `M ${a.x} ${a.y} C ${a.x+dx} ${a.y} ${b.x-dx} ${b.y} ${b.x} ${b.y}`; }
+
+function renderWires(tempPath){
+  const svg=$svg(); if(!svg) return;
+  // svg is offset (-2000,-2000); shift paths so world (0,0)=svg (2000,2000)
+  const OFF=2000;
+  let paths='';
+  NG.graph.edges.forEach(ed=>{
+    const a=nodeById(ed.from), b=nodeById(ed.to); if(!a||!b) return;
+    const spec=NG.reg[b.type]; const idx=(spec.inputs||[]).indexOf(ed.toPort); if(idx<0)return;
+    const p1=outAnchor(a), p2=inAnchor(b,idx);
+    paths+=`<path d="${bez({x:p1.x+OFF,y:p1.y+OFF},{x:p2.x+OFF,y:p2.y+OFF})}" fill="none" stroke="#6b7686" stroke-width="2"/>`;
+  });
+  if(tempPath) paths+=`<path d="${tempPath}" fill="none" stroke="#f5a623" stroke-width="2" stroke-dasharray="5 4"/>`;
+  svg.innerHTML=paths;
+}
+
+// --- interactions ---
+function evWorld(e){ const r=$c().getBoundingClientRect();
+  return {x:e.clientX-r.left-NG.pan.x, y:e.clientY-r.top-NG.pan.y}; }
+function startNodeDrag(e,n,card){
+  e.preventDefault(); const s=evWorld(e), ox=n.x-s.x, oy=n.y-s.y;
+  function mv(ev){ const w=evWorld(ev); n.x=Math.round(w.x+ox); n.y=Math.round(w.y+oy);
+    card.style.left=n.x+'px'; card.style.top=n.y+'px'; renderWires(); }
+  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); scheduleGraph(); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+function startWire(e,fromId){
+  e.preventDefault(); const OFF=2000; const a=outAnchor(nodeById(fromId));
+  function mv(ev){ const w=evWorld(ev);
+    renderWires(bez({x:a.x+OFF,y:a.y+OFF},{x:w.x+OFF,y:w.y+OFF})); }
+  function up(ev){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up);
+    const el=document.elementFromPoint(ev.clientX,ev.clientY);
+    if(el&&el.classList.contains('port')&&el.dataset.kind==='in'){
+      addEdge(fromId, el.dataset.node, el.dataset.port);
+    } else renderWires();
+  }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+function startPan(e){
+  if(e.target.closest('.ncard')) return;
+  const c=$c(); c.classList.add('grabbing'); const sx=e.clientX-NG.pan.x, sy=e.clientY-NG.pan.y;
+  function mv(ev){ NG.pan.x=ev.clientX-sx; NG.pan.y=ev.clientY-sy;
+    $w().style.transform=`translate(${NG.pan.x}px,${NG.pan.y}px)`; }
+  function up(){ c.classList.remove('grabbing'); document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+}
+
+function addEdge(from,to,port){
+  if(from===to) return;                                  // no self-loops
+  NG.graph.edges = NG.graph.edges.filter(e=>!(e.to===to&&e.toPort===port)); // one wire per input
+  NG.graph.edges.push({from,to,toPort:port});
+  renderGraph(); scheduleGraph();
+}
+function removeEdge(ed){ NG.graph.edges=NG.graph.edges.filter(e=>e!==ed); renderGraph(); scheduleGraph(); }
+function addNode(type){
+  const spec=NG.reg[type]; if(!spec) return;
+  const n={id:newId(type),type,x:Math.round(80-NG.pan.x+120),y:Math.round(60-NG.pan.y+120),params:{}};
+  (spec.params||[]).forEach(pp=>n.params[pp.key]=pp.def);
+  NG.graph.nodes.push(n); renderGraph();
+}
+function delNode(id){
+  NG.graph.nodes=NG.graph.nodes.filter(n=>n.id!==id);
+  NG.graph.edges=NG.graph.edges.filter(e=>e.from!==id&&e.to!==id);
+  renderGraph(); scheduleGraph();
+}
+function fitGraph(){
+  if(!NG.graph.nodes.length) return;
+  const minx=Math.min(...NG.graph.nodes.map(n=>n.x)), miny=Math.min(...NG.graph.nodes.map(n=>n.y));
+  NG.pan.x=40-minx; NG.pan.y=20-miny; renderGraph();
+}
+
 // ---- init -----------------------------------------------------------------
 (async function init(){
   const r = await fetch('/api/defaults'); defaults = await r.json();
@@ -488,6 +716,16 @@ document.getElementById('presetSel').onchange = e=> loadPreset(e.target.value);
   opSchema = defaults.op_schema || {};
   shade.stack = JSON.parse(JSON.stringify(defaults.stack_default || []));
   buildControls();
+  // node-graph registry + default graph
+  try{
+    const g = await (await fetch('/api/graph_defaults')).json();
+    NG.reg = g.registry||{}; NG.graph = JSON.parse(JSON.stringify(g.default_graph||{nodes:[],edges:[]}));
+    buildAddMenu();
+  }catch(e){ console.warn('graph defaults failed', e); }
+  document.querySelectorAll('#shapemode .seg button').forEach(b=> b.onclick=()=>setMode(b.dataset.mode));
+  document.getElementById('naddBtn').onclick=()=> addNode(document.getElementById('naddSel').value);
+  document.getElementById('nfit').onclick=fitGraph;
+  $c().addEventListener('mousedown', startPan);
   await loadPresetList();
   runShade();
 })();

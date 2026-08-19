@@ -1,6 +1,18 @@
 # Lamp Studio — State log
 
-## Resume point (2026-08-18, latest)
+## Resume point (2026-08-19, latest)
+**Repo is now git-initialised** (branch `main`, first commit = Phases 1–5).
+**Phase 6 — FIELD NODE GRAPH is DONE + verified** (Grasshopper-style, user wanted
+"very very complex patterns"). New `graph_engine.py` (29 node types), integrated
+into the mesher, server endpoint + a custom dependency-free SVG node editor in the
+UI. Watertight export verified. See the Phase 6 section below.
+**Next when you resume:** commit Phase 6 (done this session if you see it in `git log`),
+then pick from — (a) more nodes (image-map, curve/ramp, polar coords, warp-Z, SDF
+shapes), (b) save/load graphs as presets end-to-end (backend persists shade.graph
+already; add a couple of showcase graph presets), (c) Phase 4 batch/catalogue export
+(sweep a node param → STL set). Deferred: Phase 2 base polish (base too flat).
+
+## Resume point (2026-08-18)
 Phases 1–3 done+verified. **Phase 5 (operator-stack "◆ SHAPE" editor) is now
 IMPLEMENTED across all layers and works** — see the Phase 5 section below.
 **Next when you resume:** re-run the *fixed* UI verify (`python _verify_ui_p5.py`,
@@ -78,6 +90,45 @@ construction (collar + top band stay solid). Pure numpy, no new deps.
 Python http.server default HTTP/1.0 races with browser socket reuse -> live
 sliders (many quick fetches) hung. Fix: `protocol_version="HTTP/1.1"` + `timeout=30`
 on Handler (every response already sets Content-Length). Debug counters removed.
+
+## Phase 6 DONE + verified — field node graph (2026-08-19)
+Grasshopper-style **field** node graph: every wire carries a scalar FIELD over the
+shade's (θ,z) surface (numpy array). Chosen over literal geometry graph (too slow/
+fragile) and built with a **custom dependency-free SVG editor** (no new deps) — both
+per the user's picks. It SUPERSEDES the old deferred "branching node-graph" idea.
+- **Engine** (`graph_engine.py`, NEW, pure numpy): 29 node types in a topo-sorted,
+  memoised, cycle-detecting DAG. Categories: generators (form/gradZ/gradTheta/const/
+  sine/noise/voronoi/gyroid/stripes/checker), math (add/sub/mul/mix/min/max/abs/
+  invert/pow/clamp/remap/smoothstep), warps (twist/warp/kaleido/mirror/tile —
+  resample via a periodic-in-θ bilinear `sample()` that inverts non-uniform z rows
+  through zf1d), terminals (displace→mm, output). Single `output` node: `radius`
+  (mm, required) + `holes` ([0,1]→thresholded, optional). `registry_for_ui()` feeds
+  the palette; `DEFAULT_GRAPH` = form→displace(voronoi)→output + voronoi→holes.
+  Smoke: `python graph_engine.py` (per-node shape check + default-graph eval).
+- **Integration** (`lamp_engine.build_shade_mesh`): when `params["graph"]` present,
+  radius comes from the graph (replaces `eval_stack`) and the perforation cell mask
+  comes from the graph's `holes` sampled at CELL CENTRES (replaces `_perforation_solid`)
+  — then reuses the SAME band + `_declink` + `_hole_rims` path, so it stays watertight
+  by construction. Form node params couple to the bayonet/base. Graph wins over stack.
+- **Server**: `GET /api/graph_defaults` (registry + default graph); `make_shade`
+  passes `graph` through to shade preview AND export.
+- **UI** (`index.html`): sidebar **◆ Stack / ⬡ Node graph** toggle. Node graph opens
+  a bottom drawer over the 3D view (live preview above while you wire). Custom SVG
+  editor: draggable node cards (category-coloured), input ○ / output ● ports,
+  drag-output-to-input to wire (one wire per input), click a wired input to
+  disconnect, per-node param sliders (live, debounced `scheduleGraph`), palette
+  dropdown grouped by category + "Add node", "Fit", canvas pan. In graph mode the
+  sidebar Stack panel + Perforation group are hidden (graph drives both).
+- **Verified**: engine smoke (29 nodes OK); mesher watertight with graph, bayonet
+  on/off (0 boundary/0 nonmanifold — high Euler is just the perforation genus);
+  legacy stack path unchanged (regression pass). Server `/api/shade` + `/api/export_shade`
+  with a graph → watertight STL (154,868 tris). Playwright `_verify_ui_p6.py`:
+  clean load (no page errors), toggle both ways, 4 cards + 4 wires, add-node,
+  live param regen (99,840→88,536 tris), drawer show/hide. Screenshots p6_*.png.
+- **Notes / next**: warps resample arrays (cheap, correct on the non-uniform grid);
+  voronoi is O(points×seeds) — fine at preview res, watch it at very high cells.
+  Graph presets: backend already persists `shade.graph` in a preset and `loadPreset`
+  restores graph mode; add a few showcase graph presets next.
 
 ## Phase 5 DONE (implemented) — operator-stack editor (2026-08-18)
 The shade surface is now an **ordered operator stack** instead of a flat radius
@@ -158,4 +209,6 @@ preset load (Deep Flute Cone → 16 flutes, sliders + geometry updated), base bu
 - **Phase 3** perforation patterns via SDF/mesh (honeycomb, voronoi, gyroid, box lattice) + overhang guardrail.
 - **Phase 4** batch/catalogue export (grid of variations → STL set + thumbnails).
 - **Phase 5** ✅ operator-stack editor over the same operator backend (linear stack;
-  add/reorder/mute/remove ops). True branching node-graph still optional.
+  add/reorder/mute/remove ops).
+- **Phase 6** ✅ FIELD NODE GRAPH (Grasshopper-style, `graph_engine.py`, 29 nodes,
+  custom SVG editor) — the true branching node graph. Delivers "very complex patterns".

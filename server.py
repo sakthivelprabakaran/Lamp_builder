@@ -21,7 +21,8 @@ BASE_TIMEOUT = 300  # seconds -- generous so a cold build123d import under machi
                     # load (other servers running) can't trip a false "crash".
 
 sys.path.insert(0, HERE)
-import lamp_engine  # numpy only; no build123d import here
+import lamp_engine   # numpy only; no build123d import here
+import graph_engine  # Phase 6 field node-graph (numpy only)
 
 os.makedirs(OUTDIR, exist_ok=True)
 os.makedirs(PRESETS, exist_ok=True)
@@ -116,6 +117,8 @@ def make_shade(params, preview=True, export=False):
     p = _num(params, lamp_engine.SHADE_DEFAULTS)
     if isinstance(params.get("stack"), list):   # operator stack (Phase 5)
         p["stack"] = params["stack"]
+    if isinstance(params.get("graph"), dict):    # field node-graph (Phase 6) -- wins
+        p["graph"] = params["graph"]
     if preview:                       # cap resolution for a snappy preview
         p["res_theta"] = min(p["res_theta"], 160)
         p["res_z"] = min(p["res_z"], 120)
@@ -183,6 +186,11 @@ class Handler(BaseHTTPRequestHandler):
                 "base": lamp_engine.BASE_DEFAULTS,
                 "op_schema": lamp_engine.OP_SCHEMA,
                 "stack_default": lamp_engine.STACK_DEFAULT,
+            }))
+        if self.path == "/api/graph_defaults":
+            return self._send(200, json.dumps({
+                "registry": graph_engine.registry_for_ui(),
+                "default_graph": graph_engine.DEFAULT_GRAPH,
             }))
         if self.path == "/api/presets":
             return self._send(200, json.dumps({"presets": _list_presets()}))

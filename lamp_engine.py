@@ -27,6 +27,8 @@ import math
 import struct
 import numpy as np
 
+import graph_engine        # Phase 6 field node-graph (pure numpy, no new deps)
+
 
 # --------------------------------------------------------------------------- #
 #  Parameters
@@ -384,10 +386,16 @@ def _declink(solid, passes=4):
 def build_shade_mesh(params):
     """Return (verts Nx3 float32, faces Mx3 int32) for a watertight thin-wall shade."""
     p = dict(SHADE_DEFAULTS); p.update({k: params[k] for k in params if k in SHADE_DEFAULTS})
-    # Surface shape comes from the operator stack (Phase 5); fall back to a stack
-    # synthesised from the flat params so legacy callers/presets still render.
-    stack = params.get("stack") or _default_stack_from_flat(p)
-    form = next((o for o in stack if o.get("type") == "form"), None)
+    # Surface shape comes from EITHER a field node-graph (Phase 6) or the operator
+    # stack (Phase 5); either way synthesise a fallback so legacy callers render.
+    graph = params.get("graph")
+    if graph:
+        fnode = next((n for n in graph.get("nodes", []) if n.get("type") == "form"), None)
+        form = (fnode or {}).get("params")
+        stack = None
+    else:
+        stack = params.get("stack") or _default_stack_from_flat(p)
+        form = next((o for o in stack if o.get("type") == "form"), None)
     if form:                                 # let the bayonet/base couple to the form
         for k in ("r_bottom", "r_top", "bulge", "bulge_pos"):
             if k in form:
@@ -416,7 +424,10 @@ def build_shade_mesh(params):
     zf = np.broadcast_to(zf1d[:, None], (nz, nt)).copy()
     z = zf * H
 
-    r_out, _ = eval_stack(theta, zf, stack)
+    if graph:
+        r_out = graph_engine.evaluate(graph, theta, zf, zf1d)["radius"].astype(float).copy()
+    else:
+        r_out, _ = eval_stack(theta, zf, stack)
     r_in = np.maximum(r_out - wall, 0.5)     # keep inner radius positive
 
     if bayo:
@@ -451,7 +462,18 @@ def build_shade_mesh(params):
     ii = ii.ravel(); jj = jj.ravel()
 
     # --- solid/hole mask over cells (nz-1, nt). All-solid unless a pattern is on ---
-    pat_on = str(p["pattern"]).lower() != "none"
+    # Graph mode: sample the graph's `holes` output at cell centres (matching how
+    # _perforation_solid samples), on the TRUE height fraction so patterns line up
+    # with the visible surface. Stack mode: the Phase-3 perforation patterns.
+    graph_holes = None
+    if graph:
+        zc = (z[:-1, 0] + z[1:, 0]) / 2.0
+        zf_c = zc / H
+        th_c = 2.0 * math.pi * (np.arange(nt) + 0.5) / nt
+        TH = np.broadcast_to(th_c[None, :], (nz - 1, nt)).copy()
+        ZF = np.broadcast_to(zf_c[:, None], (nz - 1, nt)).copy()
+        graph_holes = graph_engine.evaluate(graph, TH, ZF, zf_c)["holes"]  # bool or None
+    pat_on = (graph_holes is not None) if graph else (str(p["pattern"]).lower() != "none")
     solid = np.ones((nz - 1, nt), dtype=bool)
     if pat_on:
         zc = (z[:-1, 0] + z[1:, 0]) / 2.0                       # cell-centre heights
@@ -460,11 +482,14 @@ def build_shade_mesh(params):
         if z_hi <= z_lo + 5.0:
             z_hi = z_lo + 5.0
         band = (zc >= z_lo) & (zc <= z_hi)                      # (nz-1,)
-        ucol = ((np.arange(nt) + 0.5) / nt)[None, :]
-        ugrid = np.broadcast_to(ucol, (nz - 1, nt))
-        vgrid = np.clip((zc[:, None] - z_lo) / (z_hi - z_lo), 0.0, 1.0)
-        vgrid = np.broadcast_to(vgrid, (nz - 1, nt))
-        keep = _perforation_solid(ugrid, vgrid, p)
+        if graph:
+            keep = ~graph_holes                                 # solid where NOT a hole
+        else:
+            ucol = ((np.arange(nt) + 0.5) / nt)[None, :]
+            ugrid = np.broadcast_to(ucol, (nz - 1, nt))
+            vgrid = np.clip((zc[:, None] - z_lo) / (z_hi - z_lo), 0.0, 1.0)
+            vgrid = np.broadcast_to(vgrid, (nz - 1, nt))
+            keep = _perforation_solid(ugrid, vgrid, p)
         solid = np.where(band[:, None], keep, True)
         solid = _declink(solid)          # kill diagonal pinches -> manifold + printable
 
