@@ -1,0 +1,98 @@
+{
+  "shade": {
+    "graph": {
+      "nodes": [
+        {
+          "id": "form",
+          "type": "form",
+          "x": 40,
+          "y": 40,
+          "params": {
+            "r_bottom": 72,
+            "r_top": 58,
+            "bulge": 22,
+            "bulge_pos": 0.45
+          }
+        },
+        {
+          "id": "vor",
+          "type": "voronoi",
+          "x": 40,
+          "y": 230,
+          "params": {
+            "cells_u": 14,
+            "cells_v": 14,
+            "jitter": 0.7,
+            "metric": 1,
+            "seed": 5
+          }
+        },
+        {
+          "id": "gz",
+          "type": "gradZ",
+          "x": 40,
+          "y": 470,
+          "params": {}
+        },
+        {
+          "id": "mask",
+          "type": "smoothstep",
+          "x": 250,
+          "y": 470,
+          "params": {
+            "edge0": 0.4,
+            "edge1": 0.6
+          }
+        },
+        {
+          "id": "mul",
+          "type": "mul",
+          "x": 460,
+          "y": 330,
+          "params": {}
+        },
+        {
+          "id": "out",
+          "type": "output",
+          "x": 700,
+          "y": 120,
+          "params": {
+            "threshold": 0.28,
+            "invert": 0,
+            "top_solid": 12
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "form",
+          "to": "out",
+          "toPort": "radius"
+        },
+        {
+          "from": "vor",
+          "to": "mul",
+          "toPort": "a"
+        },
+        {
+          "from": "gz",
+          "to": "mask",
+          "toPort": "x"
+        },
+        {
+          "from": "mask",
+          "to": "mul",
+          "toPort": "b"
+        },
+        {
+          "from": "mul",
+          "to": "out",
+          "toPort": "holes"
+        }
+      ]
+    },
+    "height": 190,
+    "wall": 1.2
+  },
+  "base": {}
+}

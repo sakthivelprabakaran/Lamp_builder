@@ -1,0 +1,93 @@
+{
+  "shade": {
+    "graph": {
+      "nodes": [
+        {
+          "id": "form",
+          "type": "form",
+          "x": 40,
+          "y": 40,
+          "params": {
+            "r_bottom": 68,
+            "r_top": 52,
+            "bulge": 10,
+            "bulge_pos": 0.5
+          }
+        },
+        {
+          "id": "vor",
+          "type": "voronoi",
+          "x": 40,
+          "y": 230,
+          "params": {
+            "cells_u": 10,
+            "cells_v": 12,
+            "jitter": 0.55,
+            "metric": 1,
+            "seed": 9
+          }
+        },
+        {
+          "id": "tw",
+          "type": "twist",
+          "x": 250,
+          "y": 230,
+          "params": {
+            "turns": 1.1
+          }
+        },
+        {
+          "id": "disp",
+          "type": "displace",
+          "x": 470,
+          "y": 90,
+          "params": {
+            "amp": 0.12,
+            "mode": 1
+          }
+        },
+        {
+          "id": "out",
+          "type": "output",
+          "x": 710,
+          "y": 150,
+          "params": {
+            "threshold": 0.3,
+            "invert": 0,
+            "top_solid": 12
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "form",
+          "to": "disp",
+          "toPort": "base"
+        },
+        {
+          "from": "vor",
+          "to": "tw",
+          "toPort": "x"
+        },
+        {
+          "from": "tw",
+          "to": "disp",
+          "toPort": "detail"
+        },
+        {
+          "from": "disp",
+          "to": "out",
+          "toPort": "radius"
+        },
+        {
+          "from": "tw",
+          "to": "out",
+          "toPort": "holes"
+        }
+      ]
+    },
+    "height": 190,
+    "wall": 1.2
+  },
+  "base": {}
+}

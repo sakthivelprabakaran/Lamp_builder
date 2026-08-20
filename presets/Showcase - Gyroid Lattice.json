@@ -1,0 +1,76 @@
+{
+  "shade": {
+    "graph": {
+      "nodes": [
+        {
+          "id": "form",
+          "type": "form",
+          "x": 40,
+          "y": 40,
+          "params": {
+            "r_bottom": 66,
+            "r_top": 60,
+            "bulge": 6,
+            "bulge_pos": 0.5
+          }
+        },
+        {
+          "id": "gy",
+          "type": "gyroid",
+          "x": 40,
+          "y": 230,
+          "params": {
+            "period_u": 8,
+            "period_v": 10
+          }
+        },
+        {
+          "id": "disp",
+          "type": "displace",
+          "x": 300,
+          "y": 90,
+          "params": {
+            "amp": 0.05,
+            "mode": 1
+          }
+        },
+        {
+          "id": "out",
+          "type": "output",
+          "x": 560,
+          "y": 150,
+          "params": {
+            "threshold": 0.55,
+            "invert": 0,
+            "top_solid": 12
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "form",
+          "to": "disp",
+          "toPort": "base"
+        },
+        {
+          "from": "gy",
+          "to": "disp",
+          "toPort": "detail"
+        },
+        {
+          "from": "disp",
+          "to": "out",
+          "toPort": "radius"
+        },
+        {
+          "from": "gy",
+          "to": "out",
+          "toPort": "holes"
+        }
+      ]
+    },
+    "height": 190,
+    "wall": 1.2
+  },
+  "base": {}
+}

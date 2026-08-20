@@ -222,12 +222,18 @@ def _n_voronoi(ins, p, ctx):
 
 @_reg("gyroid", [], [("period_u", "Period θ", 1, 20, 1, 6),
                      ("period_v", "Period z", 1, 20, 1, 6)],
-      category="generator", label="Gyroid")
+      category="generator", label="Lattice (diagrid)")
 def _n_gyroid(ins, p, ctx):
+    # A woven diagrid lattice: two crossing diagonal wave families. High in the
+    # diamond interiors, ~0 along the strut lines -> thresholding opens the diamonds
+    # and leaves a fully-connected strut web (single printable piece). NOTE: a true
+    # 3D gyroid needs a third coordinate; on a 2D shell this is the readable stand-in
+    # (the old sin*cos+cos*sin form collapsed to a single sin(a u + b v) diagonal).
     a = _p(p, "period_u", 6) * 2 * math.pi; b = _p(p, "period_v", 6) * 2 * math.pi
     u = ctx.u; v = ctx.v
-    g = (np.sin(a * u) * np.cos(b * v) + np.sin(b * v) * np.cos(a * u))
-    return _norm01(0.5 + 0.5 * g)
+    d1 = np.sin(a * u + b * v)
+    d2 = np.sin(a * u - b * v)
+    return _norm01(np.minimum(np.abs(d1), np.abs(d2)))
 
 
 @_reg("stripes", [], [("axis", "Axis (0=θ 1=z)", 0, 1, 1, 1),
