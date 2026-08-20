@@ -148,16 +148,37 @@ def make_shade(params, preview=True, export=False, dest=None):
         p["stack"] = params["stack"]
     if isinstance(params.get("graph"), dict):    # field node-graph (Phase 6) -- wins
         p["graph"] = params["graph"]
-    if preview:                       # cap resolution for a snappy preview
-        p["res_theta"] = min(p["res_theta"], 160)
-        p["res_z"] = min(p["res_z"], 120)
+    if preview:
+        # Cap resolution for a snappy preview -- but the cap has to know what it is
+        # hiding. `weave` specifies its cane in mm, so at 160 columns a 3 mm cane is
+        # half a cell wide and the preview shows ragged ribbons instead of a woven
+        # cage: not a rough version of the export, a different shape. Patterns whose
+        # thinnest feature is sub-cell get the higher cap (mesh is ~0.35 s; the cost
+        # is the ~25 MB of geometry JSON, so it stays opt-in by need, not the default).
+        # Climb the ladder until the thinnest feature actually resolves, rather than
+        # guessing one number: a single escalated cap either overshoots (slow, 60 MB of
+        # JSON) or clears the guardrail by a hair and goes ragged on the next preset.
+        # The last rung is above the slider ceiling, i.e. effectively uncapped.
+        for cap_t, cap_z in ((160, 120), (440, 260), (640, 340), (760, 420)):
+            if not lamp_engine.weave_res_warning(p, cap_t):
+                break
+        p["res_theta"] = min(p["res_theta"], cap_t)
+        p["res_z"] = min(p["res_z"], cap_z)
     v, f = lamp_engine.build_shade_mesh(p)
     wall_ok, wall = lamp_engine.min_wall_ok(p)
     warnings = []
     if not wall_ok:
         warnings.append("Wall %.1f mm is thin; <0.8 mm may be fragile." % wall)
+    # p["res_theta"] is already the preview-capped value here, which is what we want:
+    # the warning describes the mask the user is actually looking at.
+    weave_hint = lamp_engine.weave_res_warning(p, p["res_theta"])
+    if weave_hint:
+        warnings.append(weave_hint)
 
-    result = {"ok": True, "warnings": warnings}
+    # Report the resolution actually used, capped or not, so the preview cannot
+    # silently differ from what an export will produce.
+    result = {"ok": True, "warnings": warnings,
+              "res": [int(p["res_theta"]), int(p["res_z"])]}
     if export:
         ok, rep = lamp_engine.verify_mesh(v, f)
         rel = "shade.stl"

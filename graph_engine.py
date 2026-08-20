@@ -236,6 +236,90 @@ def _n_gyroid(ins, p, ctx):
     return _norm01(np.minimum(np.abs(d1), np.abs(d2)))
 
 
+def weave_field(u, v, cols=18.0, turns=0.9, width=0.06, fine=0.0,
+                crossing=True, du_mm=None, dv_mm=None):
+    """Crossing-helix cane strands -- the rattan / wicker cage look.
+
+    A strand family is the level set of a phase `phi = cols*u +- k*v`: material is
+    whatever lies within a half-width of a whole phase. Running the family both ways
+    makes the two sets cross, which is what reads as *woven* and also keeps the cage
+    one connected piece.
+
+    `turns` is in REVOLUTIONS -- how far around the form one cane travels over the
+    band -- so the v coefficient is `cols*turns`, not `turns`. That distinction is the
+    whole look: at `turns=1/cols` a cane shifts by a single strand spacing over the
+    entire height, which is visually vertical and makes the two families run nearly
+    parallel instead of crossing. A cane has to cross a real fraction of the
+    circumference for the diamonds to open up.
+
+    `width` is a phase half-width by default. Pass `du_mm` (d(u) per mm around the
+    circumference -- an ARRAY, because it depends on the local radius) and `dv_mm`
+    (d(v) per mm up the band) to switch it to a real cane width IN MM. That matters
+    on a bulged form: a constant *fraction* of the circumference makes the cane ~3x
+    fatter at the equator of a gourd than at its neck, which no real weave does.
+    """
+    k = float(cols) * float(turns)      # phase per unit v -- shared by every family
+
+    def halfw(c, w):
+        if du_mm is None:
+            return min(0.48, float(w))
+        # |grad phi| in phase-per-mm: a steeper pitch crosses more phase per mm, so
+        # the same physical cane needs a proportionally wider phase band.
+        g = np.sqrt((float(c) * du_mm) ** 2 + (k * dv_mm) ** 2)
+        return np.minimum(0.48, 0.5 * float(w) * g)   # 0.48 -> never silently solid
+
+    def strand(phi, hw):
+        s = np.mod(phi, 1.0)
+        return np.minimum(s, 1.0 - s) < hw
+
+    m = strand(cols * u + k * v, halfw(cols, width))
+    if crossing:
+        m = m | strand(cols * u - k * v, halfw(cols, width))
+    if fine and float(fine) > 1e-9:
+        cf = float(cols) * float(fine)      # only the u coefficient scales, so the fine
+        wf = float(width) * 0.55            # family leans SHALLOWER -> it crosses the
+        m = m | strand(cf * u + k * v, halfw(cf, wf))   # coarse cane instead of shadowing
+        if crossing:                                    # it at the same angle
+            m = m | strand(cf * u - k * v, halfw(cf, wf))
+    return m
+
+
+def weave_binding(v, count, width, dv_mm=None):
+    """The horizontal hoops that bind a real cane cage, spaced evenly over the band.
+    `width` is mm when `dv_mm` is given, else in v units. None when count <= 0."""
+    n = int(round(float(count)))
+    if n <= 0:
+        return None
+    hw = 0.5 * float(width) * (dv_mm if dv_mm else 1.0)
+    m = np.zeros(np.shape(v), dtype=bool)
+    for k in range(1, n + 1):
+        m = m | (np.abs(v - k / (n + 1.0)) < hw)
+    return m
+
+
+@_reg("weave", [], [("cols", "Strands θ", 4, 60, 1, 18),
+                    ("turns", "Helix revs", -1.5, 1.5, 0.02, 0.35),
+                    ("width", "Cane width", 0.01, 0.45, 0.005, 0.06),
+                    ("fine", "Fine family (0=off)", 0, 5, 1, 2),
+                    ("crossing", "Cross both ways", 0, 1, 1, 1),
+                    ("rings", "Binding hoops", 0, 8, 1, 0),
+                    ("ring_w", "Hoop width", 0.01, 0.3, 0.005, 0.05)],
+      category="generator", label="Weave / Rattan")
+def _n_weave(ins, p, ctx):
+    # Same polarity convention as voronoi/gyroid: HIGH in the opening, ~0 on the
+    # material, so wiring this straight into output.holes opens the gaps between the
+    # canes and leaves the cage standing. Width here is in phase units, not mm --
+    # the holes pass has no radius to convert with (the mesher's `weave` pattern
+    # does, and uses mm).
+    cane = weave_field(ctx.u, ctx.v, cols=_p(p, "cols", 18), turns=_p(p, "turns", 0.35),
+                       width=_p(p, "width", 0.06), fine=_p(p, "fine", 2),
+                       crossing=int(round(_p(p, "crossing", 1))) != 0)
+    hoops = weave_binding(ctx.v, _p(p, "rings", 0), _p(p, "ring_w", 0.05))
+    if hoops is not None:
+        cane = cane | hoops
+    return (~cane).astype(float)
+
+
 @_reg("stripes", [], [("axis", "Axis (0=θ 1=z)", 0, 1, 1, 1),
                       ("count", "Count", 1, 40, 1, 10),
                       ("duty", "Duty", 0.05, 0.95, 0.01, 0.5),

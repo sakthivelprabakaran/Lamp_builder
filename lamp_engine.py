@@ -52,11 +52,19 @@ SHADE_DEFAULTS = dict(
     res_z=180,             # vertical resolution
     seed=1,                # noise seed (integer)
     # --- perforation pattern (Phase 3): holes cut through the thick wall ---
-    pattern="none",        # none | honeycomb | voronoi | gyroid | grid
-    pat_cols=14,           # pattern cells around the circumference
+    pattern="none",        # none | dots | honeycomb | voronoi | gyroid | grid | weave
+    pat_cols=14,           # pattern cells around the circumference (weave: cane count)
     pat_rows=10,           # pattern cells up the height
     web=0.28,              # strut thickness (0..1 of cell spacing; bigger = less open)
     pat_seed=7,            # random seed (voronoi)
+    # --- woven rattan cage (pattern="weave"): unlike the other patterns this is
+    # mostly OPEN -- the mask is the cane itself -- and its widths are real mm, so a
+    # bulged form keeps an even-looking cane instead of fattening at the equator.
+    weave_turns=0.35,      # REVOLUTIONS each cane family travels over the band
+    weave_width=4.0,       # cane width (mm)
+    weave_fine=2,          # extra finer family at N x the cane count (0 = off)
+    weave_rings=2,         # horizontal binding hoops (0 = off)
+    weave_ring_w=8.0,      # binding hoop width (mm)
     top_solid=12.0,        # solid rim band at the very top (mm), for strength
     # --- bayonet twist-lock collar at the shade bottom (mates the base) ---
     bayonet=1,             # 1 = generate the twist-lock collar, 0 = plain open bottom
@@ -298,16 +306,29 @@ def _bayonet_inner(theta, z, p, mount_r, channel_r):
     return r
 
 
-def _perforation_solid(u, v, p):
+def _perforation_solid(u, v, p, du_mm=None, dv_mm=None):
     """Boolean 'material' mask over cell centres (True = keep wall, False = hole).
     u in [0,1) around the circumference (periodic), v in [0,1] over the perforated
     band. Honeycomb/voronoi share a 'distance-to-nearest-cell web' method; a
     triangular lattice of centres yields true hexagons, random centres yield an
-    organic voronoi web."""
+    organic voronoi web. du_mm/dv_mm carry the local mm scale and are only used by
+    `weave`, whose widths are in mm."""
     pat = str(p["pattern"]).lower()
     cols = max(2, int(p["pat_cols"]))
     rows = max(2, int(p["pat_rows"]))
     web = float(p["web"])
+
+    if pat == "weave":
+        # Rattan cage: two crossing cane helices (+ an optional finer family) and
+        # horizontal binding hoops. Shared with the graph's Weave node so both paths
+        # produce the same geometry from the same numbers.
+        cane = graph_engine.weave_field(
+            u, v, cols=cols, turns=float(p["weave_turns"]),
+            width=float(p["weave_width"]), fine=float(p["weave_fine"]),
+            crossing=True, du_mm=du_mm, dv_mm=dv_mm)
+        hoops = graph_engine.weave_binding(v, p["weave_rings"],
+                                          float(p["weave_ring_w"]), dv_mm)
+        return cane if hoops is None else (cane | hoops)
 
     if pat == "grid":
         fu = np.abs(((u * cols) % 1.0) - 0.5) * 2.0     # 0 centre -> 1 edge
@@ -512,7 +533,16 @@ def build_shade_mesh(params):
             ugrid = np.broadcast_to(ucol, (nz - 1, nt))
             vgrid = np.clip((zc[:, None] - z_lo) / (z_hi - z_lo), 0.0, 1.0)
             vgrid = np.broadcast_to(vgrid, (nz - 1, nt))
-            keep = _perforation_solid(ugrid, vgrid, p)
+            du_mm = dv_mm = None
+            if str(p["pattern"]).lower() == "weave":
+                # `weave` specifies cane width in mm, so it needs the local scale.
+                # d(u)/d(mm) around the circumference falls as the radius grows --
+                # that is exactly the term that keeps the cane even over a bulge.
+                rc = 0.5 * (r_out[:-1, :] + r_out[1:, :])
+                rc = 0.5 * (rc + np.roll(rc, -1, axis=1))       # -> cell centres
+                du_mm = 1.0 / np.maximum(2.0 * math.pi * rc, 1e-6)
+                dv_mm = 1.0 / max(z_hi - z_lo, 1e-6)
+            keep = _perforation_solid(ugrid, vgrid, p, du_mm, dv_mm)
         solid = np.where(band[:, None], keep, True)
         # The bottom/top cap rings are emitted for every column, and _hole_rims
         # treats off-grid row neighbours as solid, so a hole in the first or last
@@ -675,6 +705,34 @@ def min_wall_ok(params):
     """Guardrail: warn if the wall is below a printable/translucent range."""
     w = float(params.get("wall", SHADE_DEFAULTS["wall"]))
     return w >= 0.8, w
+
+
+def weave_res_warning(params, res_theta):
+    """Guardrail for `weave`: the cane width is in mm but the mask is quantised to
+    cells, so a cane thinner than about one cell drops out in ragged patches. Worth a
+    warning rather than a silent clamp, because the fix (more resolution) costs time
+    and the user should choose. Returns a message or None."""
+    if str(params.get("pattern", "none")).lower() != "weave":
+        return None
+    p = dict(SHADE_DEFAULTS)
+    p.update({k: params[k] for k in params if k in SHADE_DEFAULTS})
+    p.update(_form_params(params))
+    r_max = max(float(p["r_bottom"]), float(p["r_top"])) + max(0.0, float(p["bulge"]))
+    nt = max(24, int(res_theta))
+    cell = 2.0 * math.pi * r_max / nt              # widest cell arc, at the bulge
+    cane = float(p["weave_width"])
+    # Measure the THINNEST family, not the nominal cane: the fine family is 0.55x as
+    # wide at 2x the count, so it aliases first and it is what makes the cage look
+    # ragged while the coarse canes still read as clean.
+    thin, what = cane, "Cane"
+    if float(p["weave_fine"]) > 0:
+        thin, what = cane * 0.55, "Fine cane"
+    if thin >= 1.3 * cell:
+        return None
+    need = int(math.ceil(2.0 * math.pi * r_max * 1.3 / max(thin, 0.1) / 20.0) * 20)
+    return ("%s %.1f mm is thinner than the %.1f mm cell at this resolution, so it "
+            "will look ragged -- raise Cells around to ~%d, widen the cane, or turn the "
+            "fine family off." % (what, thin, cell, need))
 
 
 # --------------------------------------------------------------------------- #

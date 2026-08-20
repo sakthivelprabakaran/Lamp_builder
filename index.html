@@ -214,12 +214,19 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const SHADE_CTRL = [
   ['Shade','height','Height',80,320,1],
   ['Shade','wall','Wall thickness',0.6,2.5,0.1],
-  ['Quality','res_theta','Around res',60,300,10],
-  ['Quality','res_z','Vertical res',40,260,10],
+  // Woven rattan needs far more circumferential resolution than the other patterns:
+  // its cane width is in mm, so a coarse grid quantises it into ragged ribbons.
+  ['Quality','res_theta','Around res',60,720,20],
+  ['Quality','res_z','Vertical res',40,420,10],
   ['Perforation','pat_cols','Cells around',4,40,1],
   ['Perforation','pat_rows','Cells up',3,30,1],
   ['Perforation','web','Web / hole size',0.08,0.6,0.01],
   ['Perforation','pat_seed','Voronoi seed',1,50,1],
+  ['Perforation','weave_turns','Weave: helix revs',-1.5,1.5,0.02],
+  ['Perforation','weave_width','Weave: cane width mm',1,12,0.2],
+  ['Perforation','weave_fine','Weave: fine family',0,5,1],
+  ['Perforation','weave_rings','Weave: binding hoops',0,8,1],
+  ['Perforation','weave_ring_w','Weave: hoop width mm',2,20,0.5],
   ['Perforation','top_solid','Top solid band',0,40,1],
   ['Twist-lock','bayonet','Enable (0/1)',0,1,1],
   ['Twist-lock','collar_h','Collar height',10,30,1],
@@ -396,8 +403,11 @@ function buildControls(){
           <option value="voronoi">Voronoi (organic)</option>
           <option value="gyroid">Gyroid (wavy struts)</option>
           <option value="grid">Grid (square holes)</option>
+          <option value="weave">Woven rattan (cane cage)</option>
         </select>
-        <div class="tiny">Holes are cut through the wall and sealed watertight. Collar + top band stay solid.</div>`;
+        <div class="tiny">Holes are cut through the wall and sealed watertight. Collar + top band stay solid.
+        <b>Woven rattan</b> is the inverse — mostly open, and its cane/hoop widths are real mm, so
+        raise <i>Cells around</i> (Quality) until the cane stops looking ragged.</div>`;
       body.appendChild(row);
     }
     if(g==='Holder'){       // holder-type is a dropdown, not a slider
@@ -504,7 +514,11 @@ async function runShade(){
       body:JSON.stringify({params:shade})});
     const d = await r.json();
     if(d.ok){ applyShadeGeom(d.vertices, d.indices); showWarn(d.warnings);
-      hud(`shade ${d.metrics.tris.toLocaleString()} tris`); }
+      // Show the resolution the preview was actually built at: it is capped, and for
+      // a fine pattern the cap changes what you see, so it should never be implicit.
+      const cap = d.res && (d.res[0]<shade.res_theta || d.res[1]<shade.res_z);
+      hud(`shade ${d.metrics.tris.toLocaleString()} tris`
+          + (d.res?` • preview ${d.res[0]}×${d.res[1]}${cap?` (of ${shade.res_theta}×${shade.res_z} on export)`:''}`:'')); }
     else showWarn([d.error||'shade failed']);
   }catch(e){ showWarn([''+e]); }
   finally{ inflight=false; setBusy(false); checkBaseStale();

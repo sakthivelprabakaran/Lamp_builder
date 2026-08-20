@@ -1,9 +1,30 @@
 # Lamp Studio — State log
 
-## Resume point (2026-08-20, latest)
-**Phase 4 — BATCH / CATALOGUE EXPORT is DONE + verified end-to-end.** Also fixed a
-bug-hunt batch (2 print-affecting mesh bugs, 2 UX bugs) and a viewer orientation bug
-that had been there since Phase 1.
+## Resume point (2026-08-20, latest) — WOVEN RATTAN pattern
+**A `weave` (woven rattan / cane cage) pattern is DONE + verified**, added on request
+from a reference photo of a woven pendant lamp. It is the first pattern that is mostly
+OPEN — the mask is the cane itself, not a web around holes — and the first whose widths
+are specified in real millimetres.
+
+Verified: `weave_mask_a.png`-style unrolled mask shows a true crossing lattice; mesh is
+watertight, correctly wound, ONE component (crossing families guarantee connectivity);
+48% open overall with the worst row still 28% open; mm conversion recovers 3.93–4.08 mm
+for a requested 4.0 mm cane. Preset: `presets/Woven Rattan Gourd.json`.
+
+**Open on this thread:**
+- Cane edges are visibly stair-stepped, because the mask quantises to CELL centres and
+  hole outlines snap to cell edges. The guardrail only ensures a cane is ≥1.3 cells
+  wide (not ragged); it cannot make the edge smooth. A real fix is sub-cell boundary
+  snapping — move the hole outline onto the actual phase level set instead of the cell
+  grid. Bigger change; not attempted.
+- The user's Amazon link is **not** the pendant in the photo — it is a Panasonic
+  **PDLM2803BR12, 3 W round mini modular surface downlighter** (a small cabinet light).
+  So it is the LIGHT SOURCE to mount, not a silhouette reference. amazon.in returns
+  HTTP 500 to WebFetch and DuckDuckGo/Moglix are blocked too, so its body diameter and
+  depth are still unknown — needed before the shade's top mount / base bore can be
+  dimensioned to it. ASK THE USER for the "Product Dimensions" line.
+- The gourd silhouette (230 tall × 228 wide) was read off the photo's proportions, not
+  from the product listing.
 
 **Next when you resume**, pick from:
 - **Phase 2 base polish** — the base is too flat; the user deferred this twice, but it
@@ -11,8 +32,8 @@ that had been there since Phase 1.
 - **Physical print validation** of the twist-lock / `fit_clr` against a real holder
   (Test-fit ring button exists for exactly this; nothing has been printed yet).
 - **Remaining findings from the 2026-08-20 hunt** (see that section): #4 dead graph
-  warnings, #6 preview-vs-export resolution mismatch, #7 slow (~26 s) full-res export
-  with no feedback/timeout, #9 minors.
+  warnings, #7 slow (~26 s) full-res export with no feedback/timeout, #9 minors.
+  (#6 preview-vs-export mismatch is now FIXED — the weave work forced it.)
 - More Phase 6 nodes (image-map, curve/ramp, polar, warp-Z, SDF).
 
 ## Bug hunt + Phase 4 session (2026-08-20)
@@ -342,6 +363,25 @@ preset load (Deep Flute Cone → 16 flutes, sliders + geometry updated), base bu
   nipple vs a specific IKEA cord set) so the collar/bore can be dimensioned to it.
 
 ## Lessons learned
+- **Name a parameter in the unit the user thinks in.** The weave's `turns` started as a
+  PHASE coefficient, so `turns=1.0` shifted a cane by one strand spacing over the whole
+  height — visually vertical, and the two families ran near-parallel so they never
+  crossed. It looked like an aliasing bug for two rounds. `turns` now means
+  REVOLUTIONS (v coefficient = `cols*turns`), and the slider range −1.5…1.5 is
+  meaningful instead of unreachable.
+- **Verify the invariant the code actually guarantees.** Constant-mm cane width does NOT
+  give constant horizontal footprint per row — the helix pitch angle changes with radius,
+  so an even cane legitimately covers more arc at the equator. The testable invariant is
+  the PERPENDICULAR width, recovered as `coverage / |grad phi|`. Testing the footprint
+  produced a confident 1.93× "failure" against correct code.
+- **Measure a mask, not a render.** Dumping the unrolled boolean mask to a PNG (stdlib
+  `zlib` + `struct`, ~20 lines) answered "does it look woven?" in 0.4 s, where the 3D
+  screenshot round-trip took ~5 min and hid the cause behind stair-stepping.
+- A density sweep needs TWO numbers: overall open fraction and the WORST ROW. Constant-mm
+  cane eats a far bigger share of a small circumference, so a weave tuned on the average
+  silts the neck solid while the equator still looks right.
+- Keep a mask family away from saturation before measuring it: above ~50% duty adjacent
+  strands merge, coverage pins near 100%, and every derived number is meaningless.
 - `np.unique(axis=0)` on the edge array is slow (~1.2 s); encoding each edge as a
   single int64 key `lo*(V+1)+hi` drops verify to ~40 ms.
 - Binary STL: build a structured-dtype record array and `tobytes()` — the
