@@ -514,6 +514,12 @@ def build_shade_mesh(params):
             vgrid = np.broadcast_to(vgrid, (nz - 1, nt))
             keep = _perforation_solid(ugrid, vgrid, p)
         solid = np.where(band[:, None], keep, True)
+        # The bottom/top cap rings are emitted for every column, and _hole_rims
+        # treats off-grid row neighbours as solid, so a hole in the first or last
+        # cell row would be left unsealed (boundary + non-manifold edges). Keep
+        # those two rows solid; _declink only ever fills, so it can't undo this.
+        solid[0, :] = True
+        solid[-1, :] = True
         solid = _declink(solid)          # kill diagonal pinches -> manifold + printable
 
     def quads_all(surf, flip):
@@ -578,10 +584,14 @@ def _hole_rims(solid, gi):
         C = gi(1, ri + ob[0], rj + ob[1]); D = gi(1, ri + oa[0], rj + oa[1])
         tris.append(np.stack([A, B, C], 1)); tris.append(np.stack([A, C, D], 1))
 
+    # Corner order per family is chosen so every rim normal points INTO the hole
+    # (outward from the material). Getting it backwards still yields a closed
+    # mesh -- verify_mesh counts undirected edges -- but slicers see inverted
+    # facets, so the two theta-facing families must be wound as below.
     right = solid & ~np.roll(solid, -1, axis=1)
-    add(right, (0, 1), (1, 1))
+    add(right, (1, 1), (0, 1))
     left = solid & ~np.roll(solid, 1, axis=1)
-    add(left, (1, 0), (0, 0))
+    add(left, (0, 0), (1, 0))
     topn = solid & ~rows_shift(solid, 1)
     add(topn, (1, 0), (1, 1))
     botn = solid & ~rows_shift(solid, -1)
