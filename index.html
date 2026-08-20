@@ -245,6 +245,11 @@ function fitCamera(){
   const r = Math.max(s.x,s.y,s.z);
   camera.position.set(c.x + r*1.2, c.y + r*0.7, c.z + r*1.6);
 }
+// Test hook (like window.__shade / __base): lets a headless run assert that a
+// rebuild did not steal the camera.
+window.__cam = ()=>[camera.position.x, camera.position.y, camera.position.z,
+                    controls.target.x, controls.target.y, controls.target.z]
+                   .map(n=>+n.toFixed(3));
 
 function setVisibility(){
   if(shadeMesh) shadeMesh.visible = (showMode!=='base');
@@ -410,6 +415,33 @@ function scheduleBase(){
   }
 }
 
+// The base is DERIVED from shade params (lamp_engine._base_dims / bayonet_geometry),
+// so a shade slider or a node-graph `form` edit silently invalidates the base on
+// screen -- the twist-lock would no longer mate what you see. Fingerprint exactly
+// those inputs and re-check after every shade regen: one hook covers sliders, graph
+// edits, stack edits and preset loads without duplicating the key list per caller.
+const BASE_DEP_KEYS = ['bayonet','collar_h','collar_wall','lug_protr','fit_clr',
+                       'pocket_z0','pocket_h','lug_count','channel_w_deg','lock_w_deg'];
+function formRBottom(){                    // mirrors lamp_engine._form_params
+  let src = shade;
+  if(shade.graph){
+    const fn = (shade.graph.nodes||[]).find(n=>n.type==='form');
+    src = (fn && fn.params) || {};
+  } else if(shade.stack){
+    src = shade.stack.find(o=>o.type==='form') || {};
+  }
+  return src.r_bottom!==undefined ? src.r_bottom : shade.r_bottom;
+}
+function baseFingerprint(){
+  return BASE_DEP_KEYS.map(k=>shade[k]).concat(formRBottom()).join('|');
+}
+let baseFp = null;
+function checkBaseStale(){
+  const fp = baseFingerprint();
+  if(baseFp!==null && fp!==baseFp) scheduleBase();
+  baseFp = fp;
+}
+
 async function runShade(){
   if(inflight){ pending=true; return; }
   inflight=true; setBusy(true);
@@ -421,7 +453,8 @@ async function runShade(){
       hud(`shade ${d.metrics.tris.toLocaleString()} tris`); }
     else showWarn([d.error||'shade failed']);
   }catch(e){ showWarn([''+e]); }
-  finally{ inflight=false; setBusy(false); if(pending){ pending=false; runShade(); } }
+  finally{ inflight=false; setBusy(false); checkBaseStale();
+           if(pending){ pending=false; runShade(); } }
 }
 function applyShadeGeom(vertices, indices){
   const g = new THREE.BufferGeometry();
@@ -453,9 +486,11 @@ function applyBaseGeom(pos){
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
   g.computeVertexNormals();
-  if(baseMesh){ baseMesh.geometry.dispose(); baseMesh.geometry=g; }
-  else { baseMesh = new THREE.Mesh(g, baseMat); scene.add(baseMesh); }
-  setVisibility(); fitCamera();
+  // Only frame the camera when the base first appears. Refitting on every rebuild
+  // fights the user's orbit while base sliders live-regenerate (setShow still fits
+  // on a view change, so switching to Base/Both frames properly).
+  if(baseMesh){ baseMesh.geometry.dispose(); baseMesh.geometry=g; setVisibility(); }
+  else { baseMesh = new THREE.Mesh(g, baseMat); scene.add(baseMesh); setVisibility(); fitCamera(); }
   window.__base = {verts: pos.length/3};
 }
 
