@@ -113,7 +113,36 @@ def _num(params, defaults):
     return out
 
 
-def make_shade(params, preview=True, export=False):
+def _safe_out(rel):
+    """Absolute path for a caller-supplied path under output/, or None if it tries
+    to escape. Batch exports name their own files, so never trust the string."""
+    rel = (rel or "").replace("\\", "/").strip("/")
+    if not rel:
+        return None
+    parts = [q for q in rel.split("/") if q not in ("", ".")]
+    if any(q == ".." or os.path.isabs(q) or ":" in q for q in parts):
+        return None
+    fp = os.path.abspath(os.path.join(OUTDIR, *parts))
+    root = os.path.abspath(OUTDIR)
+    if os.path.commonpath([fp, root]) != root:
+        return None
+    return fp
+
+
+def _slug(s, fallback="item"):
+    out = "".join(c if (c.isalnum() or c in "-_ .") else "_" for c in str(s)).strip()
+    return out or fallback
+
+
+def _slug_path(s):
+    """Slug each segment of a relative path, keeping the separators."""
+    segs = [_slug(q, "") for q in str(s or "").replace("\\", "/").split("/")]
+    return "/".join(q for q in segs if q)
+
+
+def make_shade(params, preview=True, export=False, dest=None):
+    """dest: {"subdir": "catalogue/<batch>", "name": "<slug>"} -- write the STL there
+    instead of the shared output/shade.stl (so a catalogue run can't race itself)."""
     p = _num(params, lamp_engine.SHADE_DEFAULTS)
     if isinstance(params.get("stack"), list):   # operator stack (Phase 5)
         p["stack"] = params["stack"]
@@ -131,10 +160,17 @@ def make_shade(params, preview=True, export=False):
     result = {"ok": True, "warnings": warnings}
     if export:
         ok, rep = lamp_engine.verify_mesh(v, f)
-        path = os.path.join(OUTDIR, "shade.stl")
+        rel = "shade.stl"
+        if dest:
+            rel = "/".join(x for x in (_slug_path(dest.get("subdir", "")),
+                                       _slug(dest.get("name", "shade")) + ".stl") if x)
+        path = _safe_out(rel)
+        if path is None:
+            return {"ok": False, "error": "Bad export path."}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         lamp_engine.write_binary_stl(path, v, f)
         result["metrics"] = rep
-        result["files"] = {"stl": "shade.stl"}
+        result["files"] = {"stl": rel}
         if not rep["watertight"]:
             result["warnings"].append("Mesh is not watertight -- do not print.")
         elif rep.get("components", 1) > 1:
@@ -209,12 +245,45 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, json.dumps({"error": "not found"}))
         if self.path.startswith("/download/"):
             return self._download()
+        if self.path.startswith("/view/"):
+            return self._view()
         return self._send(404, json.dumps({"error": "not found"}))
 
+    # /download/ forces an attachment, which is right for STLs but useless for the
+    # catalogue contact sheet -- it has to render in a tab, with its <img> tags
+    # resolving. /view/ serves the same output/ tree inline, html/png/csv only.
+    # .stl is included so the sheet's relative <a href="v01.stl"> works in-tab; it
+    # stays relative so the copy inside the zip still works offline.
+    VIEW_TYPES = {".html": "text/html; charset=utf-8", ".png": "image/png",
+                  ".csv": "text/csv; charset=utf-8", ".json": "application/json",
+                  ".stl": "application/octet-stream"}
+
+    def _view(self):
+        from urllib.parse import unquote
+        rel = unquote(self.path.split("/view/")[1].split("?")[0])
+        fp = _safe_out(rel)
+        ctype = self.VIEW_TYPES.get(os.path.splitext(rel)[1].lower())
+        if not (fp and ctype and os.path.isfile(fp)):
+            return self._send(404, json.dumps({"error": "not found"}))
+        with open(fp, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        # The contact sheet is a generated static page: no scripts, inline <style>,
+        # local images only. 'unsafe-inline' for style is required or the sheet renders
+        # unstyled; everything else stays denied.
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _download(self):
-        fname = os.path.basename(self.path.split("/download/")[1].split("?")[0])
-        fp = os.path.join(OUTDIR, fname)
-        if not (fname and os.path.exists(fp)):
+        from urllib.parse import unquote
+        rel = unquote(self.path.split("/download/")[1].split("?")[0])
+        fp = _safe_out(rel)            # may sit in a catalogue subdirectory
+        fname = os.path.basename(rel)
+        if not (fp and fname and os.path.isfile(fp)):
             return self._send(404, json.dumps({"error": "not found"}))
         with open(fp, "rb") as f:
             data = f.read()
@@ -227,18 +296,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         routes = ("/api/shade", "/api/export_shade", "/api/base", "/api/testfit",
-                  "/api/preset/save")
+                  "/api/preset/save", "/api/batch/thumb", "/api/batch/finish")
         if self.path not in routes:
             return self._send(404, json.dumps({"error": "not found"}))
         if not self._origin_ok():
             return self._send(403, json.dumps({"error": "forbidden"}))
-        length = int(self.headers.get("Content-Length", 0))
-        req = json.loads(self.rfile.read(length) or b"{}")
         try:
+            length = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(length) or b"{}")
             if self.path == "/api/shade":
                 return self._send(200, json.dumps(make_shade(req.get("params", {}), preview=True)))
             if self.path == "/api/export_shade":
-                return self._send(200, json.dumps(make_shade(req.get("params", {}), preview=False, export=True)))
+                return self._send(200, json.dumps(make_shade(
+                    req.get("params", {}), preview=bool(req.get("fast")), export=True,
+                    dest=req.get("dest"))))
+            if self.path == "/api/batch/thumb":
+                return self._send(200, json.dumps(_save_thumb(req)))
+            if self.path == "/api/batch/finish":
+                return self._send(200, json.dumps(_finish_batch(req)))
             if self.path in ("/api/base", "/api/testfit"):
                 job = {"params": req.get("params", {}),
                        "shade_params": req.get("shade_params", {}),
@@ -267,6 +342,153 @@ def _save_preset(req):
     with open(os.path.join(PRESETS, name + ".json"), "w") as f:
         json.dump(payload, f, indent=2)
     return {"ok": True, "presets": _list_presets(), "name": name}
+
+
+# --------------------------------------------------------------------------- #
+#  Batch / catalogue export (Phase 4)
+# --------------------------------------------------------------------------- #
+#  The sweep is driven from the browser: it walks the axis grid, POSTs each
+#  variant to /api/export_shade with its own `dest`, snapshots the WebGL canvas
+#  and POSTs the PNG here, then calls /api/batch/finish to get a contact sheet +
+#  manifest + zip. Client-driven because only the browser can render thumbnails,
+#  and it keeps the server free of long-running job state.
+
+def _save_thumb(req):
+    png = str(req.get("png", ""))
+    if "," in png:
+        png = png.split(",", 1)[1]                 # strip the data: URL prefix
+    rel = "/".join(x for x in (_slug_path(req.get("subdir", "")),
+                               _slug(req.get("name", "thumb")) + ".png") if x)
+    fp = _safe_out(rel)
+    if fp is None:
+        return {"ok": False, "error": "Bad thumbnail path."}
+    import base64
+    try:
+        data = base64.b64decode(png, validate=True)
+    except Exception:
+        return {"ok": False, "error": "Thumbnail was not valid base64 PNG data."}
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    with open(fp, "wb") as f:
+        f.write(data)
+    return {"ok": True, "file": rel}
+
+
+def _mark_duplicates(items):
+    """Tag variants whose STL is byte-identical to an earlier one.
+
+    A swept parameter can be completely inert -- e.g. pat_cols does nothing unless
+    the shape actually has a perforation op -- and the user would otherwise wait out
+    the whole sweep for a folder of clones. Equal triangle counts don't prove it, so
+    hash the files (they're on disk already and the zip re-reads them anyway)."""
+    import hashlib
+    seen = {}
+    for it in items:
+        fp = _safe_out(it.get("stl") or "")
+        if not (fp and os.path.isfile(fp)):
+            continue
+        h = hashlib.md5()
+        with open(fp, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        d = h.hexdigest()
+        if d in seen:
+            it["dup_of"] = seen[d]
+        else:
+            seen[d] = it.get("name", "")
+    return items
+
+
+def _finish_batch(req):
+    """Write manifest.csv + a browsable index.html contact sheet, then zip the
+    whole catalogue folder for one-click download."""
+    import csv, io, zipfile
+    sub = _slug_path(req.get("subdir", ""))
+    root = _safe_out(sub)
+    if not sub or root is None or not os.path.isdir(root):
+        return {"ok": False, "error": "Unknown catalogue folder."}
+    items = req.get("items") or []
+    title = str(req.get("title") or sub.split("/")[-1])
+    axes = req.get("axes") or []
+    _mark_duplicates(items)
+
+    cols = ["name", "stl", "thumb", "tris", "watertight", "single_piece",
+            "components", "printable", "dup_of"] + \
+           ["axis%d" % (i + 1) for i in range(len(axes))]
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf)
+    w.writerow(cols + ["axis_labels"])
+    for it in items:
+        vals = it.get("values") or []
+        w.writerow([it.get("name", ""), it.get("stl", ""), it.get("thumb", ""),
+                    it.get("tris", ""), it.get("watertight", ""),
+                    it.get("single_piece", ""), it.get("components", ""),
+                    it.get("printable", ""), it.get("dup_of", "")] + list(vals) +
+                   ["; ".join("%s=%s" % (a.get("label", "?"), v)
+                             for a, v in zip(axes, vals))])
+    with open(os.path.join(root, "manifest.csv"), "w", encoding="utf-8", newline="") as f:
+        f.write(buf.getvalue())
+
+    def esc(s):
+        return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace('"', "&quot;"))
+    cards = []
+    for it in items:
+        vals = it.get("values") or []
+        label = " · ".join("%s %s" % (esc(a.get("label", "?")), esc(v))
+                           for a, v in zip(axes, vals))
+        bad = (not it.get("watertight")) or not it.get("single_piece", True)
+        if bad:
+            note = "NOT PRINTABLE — %s" % esc(it.get("why", "failed the mesh gate"))
+        elif it.get("dup_of"):
+            note = "identical to %s — this axis does nothing to this shape" % esc(it["dup_of"])
+        else:
+            note = "%s tris" % esc(it.get("tris", "?"))
+        thumb = esc(os.path.basename(it.get("thumb") or ""))
+        stl = esc(os.path.basename(it.get("stl") or ""))
+        cls = "bad" if bad else ("dup" if it.get("dup_of") else "ok")
+        cards.append(
+            '<figure class="%s"><a href="%s"><img src="%s" alt="%s"></a>'
+            '<figcaption><b>%s</b><span>%s</span></figcaption></figure>'
+            % (cls, stl, thumb, esc(it.get("name", "")),
+               label or esc(it.get("name", "")), note))
+    html = """<!doctype html><meta charset="utf-8"><title>%s — Lamp Studio catalogue</title>
+<style>
+ body{background:#16191f;color:#e8e8ea;font:13px/1.5 system-ui,sans-serif;margin:24px}
+ h1{font-size:18px;font-weight:600;margin:0 0 4px} p.sub{color:#9aa3af;margin:0 0 20px}
+ .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+ figure{margin:0;background:#1e222a;border:1px solid #2c323c;border-radius:8px;overflow:hidden}
+ figure.bad{border-color:#a4443a} figure.dup{opacity:.6}
+ img{display:block;width:100%%;background:#0f1216}
+ figcaption{padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+ figcaption b{font-weight:600} figcaption span{color:#9aa3af;font-size:12px}
+ figure.bad figcaption span{color:#e0796d} figure.dup figcaption span{color:#ffcf5c}
+ a{color:inherit;text-decoration:none}
+</style>
+<h1>%s</h1>
+<p class="sub">%d variants · click a thumbnail to open its STL · sweep: %s</p>
+<div class="grid">%s</div>
+""" % (esc(title), esc(title), len(items),
+       esc(" × ".join("%s %s→%s in %s steps" % (a.get("label", "?"), a.get("from"),
+                                                a.get("to"), a.get("steps"))
+                      for a in axes)) or "n/a",
+       "\n".join(cards))
+    with open(os.path.join(root, "index.html"), "w", encoding="utf-8") as f:
+        f.write(html)
+
+    parent = os.path.dirname(sub)                 # zip sits NEXT TO the folder, not in
+    zrel = (parent + "/" if parent else "") + sub.split("/")[-1] + ".zip"
+    zpath = _safe_out(zrel)
+    if zpath is None:
+        return {"ok": False, "error": "Bad zip path."}
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                full = os.path.join(dirpath, fn)
+                z.write(full, os.path.relpath(full, root))
+    return {"ok": True, "count": len(items), "dir": sub,
+            "dupes": sum(1 for it in items if it.get("dup_of")),
+            "files": {"index": sub + "/index.html", "manifest": sub + "/manifest.csv",
+                      "zip": zrel}}
 
 
 def open_browser():

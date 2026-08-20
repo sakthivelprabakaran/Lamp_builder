@@ -26,6 +26,7 @@
   .row{ margin:8px 0; }
   .row label{ display:flex; justify-content:space-between; color:var(--mut); font-size:11px; margin-bottom:3px; }
   .row label b{ color:var(--txt); font-weight:600; }
+  button:disabled{ opacity:.45; cursor:default; }   /* Stop / Run during a catalogue run */
   input[type=range]{ width:100%; accent-color:var(--accent); }
   select,input[type=text]{ width:100%; background:#0f1116; color:var(--txt);
         border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
@@ -103,6 +104,14 @@
   .port.out{ border-color:var(--accent); }
   .port.filled{ background:var(--accent2); }
   .plabel{ position:absolute; font-size:9px; color:var(--mut); white-space:nowrap; pointer-events:none; }
+  /* catalogue (batch export) */
+  .axrow{ display:flex; gap:4px; margin-top:4px; }
+  .axrow input{ flex:1 1 0; min-width:0; }
+  #catBar{ height:4px; background:#232833; border-radius:2px; overflow:hidden; margin:6px 0 4px; display:none; }
+  #catBar i{ display:block; height:100%; width:0; background:var(--accent2); transition:width .2s; }
+  #catBar.on{ display:block; }
+  #catProg{ min-height:0; }
+  #catDone a{ color:var(--accent2); }
 </style>
 </head>
 <body>
@@ -135,6 +144,36 @@
       <button class="alt" id="genBase">Generate base</button>
       <button class="alt" id="genTestfit" style="flex:0 0 120px">Test-fit ring</button>
     </div>
+    <details class="grp" id="catgrp">
+      <summary>▦ Catalogue (batch export)</summary>
+      <div class="body">
+        <div class="row"><label>Catalogue name</label>
+          <input type="text" id="catName" placeholder="e.g. flute sweep"></div>
+        <div class="row"><label>Sweep A</label>
+          <select id="catAxA"></select>
+          <div class="axrow"><input type="number" id="catAfrom" step="any" placeholder="from">
+            <input type="number" id="catAto" step="any" placeholder="to">
+            <input type="number" id="catAsteps" min="1" max="12" step="1" value="4" title="steps"></div>
+        </div>
+        <div class="row"><label>Sweep B (optional)</label>
+          <select id="catAxB"></select>
+          <div class="axrow"><input type="number" id="catBfrom" step="any" placeholder="from">
+            <input type="number" id="catBto" step="any" placeholder="to">
+            <input type="number" id="catBsteps" min="1" max="12" step="1" value="3" title="steps"></div>
+        </div>
+        <div class="row"><label style="gap:6px;align-items:center;justify-content:flex-start">
+          <input type="checkbox" id="catFast" style="width:auto"> Fast (preview resolution)</label>
+          <div class="tiny">Full resolution is slower but is what you print. Fast is for
+            scouting a shape family.</div></div>
+        <div class="btnrow">
+          <button class="primary" id="catRun">Run catalogue</button>
+          <button class="alt" id="catStop" style="flex:0 0 70px" disabled>Stop</button>
+        </div>
+        <div id="catProg" class="tiny"></div>
+        <div id="catBar"><i></i></div>
+        <div id="catDone" class="tiny"></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -217,13 +256,20 @@ const cv = document.getElementById('cv');
 const renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x14161a);
+// The engine builds Z-up (height along +Z, z=0 = the print bed) but three.js
+// defaults to Y-up, which laid every lamp on its side with the grid slicing
+// through it. Set the world up-axis BEFORE the camera/controls exist so
+// OrbitControls orbits about Z too.
+THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 const camera = new THREE.PerspectiveCamera(45, 1, 1, 5000);
-camera.position.set(260, 180, 320);
+camera.up.set(0, 0, 1);
+camera.position.set(320, -260, 240);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 scene.add(new THREE.HemisphereLight(0xffffff, 0x33373f, 1.1));
 const dl = new THREE.DirectionalLight(0xffffff, 1.3); dl.position.set(1,2,1.5); scene.add(dl);
 const grid = new THREE.GridHelper(600, 24, 0x2a2e38, 0x22252d);
+grid.rotation.x = Math.PI / 2;      // GridHelper lies in XZ; put it on the XY bed
 scene.add(grid);
 // A warm "bulb" so translucency reads.
 const bulb = new THREE.PointLight(0xffdba0, 40, 600, 1.5);
@@ -243,13 +289,21 @@ function fitCamera(){
   const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
   controls.target.copy(c); bulb.position.set(c.x, c.y, c.z);
   const r = Math.max(s.x,s.y,s.z);
-  camera.position.set(c.x + r*1.2, c.y + r*0.7, c.z + r*1.6);
+  camera.position.set(c.x + r*1.35, c.y - r*1.15, c.z + r*0.85);   // Z-up 3/4 view
 }
 // Test hook (like window.__shade / __base): lets a headless run assert that a
 // rebuild did not steal the camera.
 window.__cam = ()=>[camera.position.x, camera.position.y, camera.position.z,
                     controls.target.x, controls.target.y, controls.target.z]
                    .map(n=>+n.toFixed(3));
+// Same idea for orientation: `updy` is where the model's +Z axis lands in screen
+// space (>0 = the lamp stands up), so a headless run can catch a Y-up regression.
+window.__orient = ()=>({
+  updy: new THREE.Vector3(0,0,100).project(camera).y - new THREE.Vector3(0,0,0).project(camera).y,
+  camUp: camera.up.toArray(),
+  worldUp: THREE.Object3D.DEFAULT_UP.toArray(),
+  gridRotX: +grid.rotation.x.toFixed(4),
+});
 
 function setVisibility(){
   if(shadeMesh) shadeMesh.visible = (showMode!=='base');
@@ -560,6 +614,192 @@ async function savePreset(){
   else showWarn([d.error||'save failed']);
 }
 
+// ---- catalogue / batch export (Phase 4) -----------------------------------
+// The sweep runs HERE rather than on the server: only the browser can render a
+// thumbnail, and a client-side loop gives progress + Stop without the server
+// having to own long-running job state.
+const CAT = { running:false, stop:false, rend:null, cam:null };
+let catOpts = [];
+
+function catAxisList(){       // every sweepable param: flat sliders + stack ops OR graph nodes
+  const out = [];
+  SHADE_CTRL.forEach(([g,key,label,min,max,step])=>
+    out.push({path:'shade.'+key, label:g+' · '+label, min, max, step}));
+  if(NG.mode==='graph'){
+    (NG.graph.nodes||[]).forEach(n=>{
+      const spec = NG.reg[n.type]; if(!spec) return;
+      (spec.params||[]).forEach(pp=> out.push({path:'graph.'+n.id+'.'+pp.key,
+        label:'⬡ '+spec.label+' · '+pp.label, min:pp.min, max:pp.max, step:pp.step}));
+    });
+  } else {
+    (shade.stack||[]).forEach((op,i)=>
+      (opSchema[op.type]||[]).forEach(([key,label,min,max,step])=>
+        out.push({path:'stack.'+i+'.'+key, label:'◆ '+op.type+' '+(i+1)+' · '+label,
+                  min, max, step})));
+  }
+  return out;
+}
+function catFill(){
+  catOpts = catAxisList();
+  ['A','B'].forEach(w=>{
+    const sel=document.getElementById('catAx'+w), prev=sel.value;
+    sel.innerHTML = (w==='B') ? '<option value="">— none —</option>' : '';
+    catOpts.forEach(o=>{ const el=document.createElement('option');
+      el.value=o.path; el.textContent=o.label; sel.appendChild(el); });
+    if([...sel.options].some(o=>o.value===prev)) sel.value=prev;
+    else if(w==='A') catRange('A', true);
+  });
+}
+function catOpt(path){ return catOpts.find(o=>o.path===path); }
+function catRange(w, reset){    // seed from/to from the chosen axis' own slider range
+  const o = catOpt(document.getElementById('catAx'+w).value);
+  const f = document.getElementById('cat'+w+'from'), t = document.getElementById('cat'+w+'to');
+  if(!o){ f.value=''; t.value=''; return; }
+  f.step=t.step=o.step; f.min=t.min=o.min; f.max=t.max=o.max;
+  if(reset || f.value==='' || t.value===''){ f.value=o.min; t.value=o.max; }
+}
+function catVals(w){
+  const o = catOpt(document.getElementById('catAx'+w).value); if(!o) return null;
+  const from=parseFloat(document.getElementById('cat'+w+'from').value);
+  const to=parseFloat(document.getElementById('cat'+w+'to').value);
+  const n=Math.max(1,Math.min(12,parseInt(document.getElementById('cat'+w+'steps').value)||1));
+  if(!isFinite(from)||!isFinite(to)) return null;
+  const vals=[];
+  for(let i=0;i<n;i++) vals.push(+((n===1?from:from+(to-from)*i/(n-1)).toFixed(4)));
+  return {axis:o, vals};
+}
+function catApply(params, path, value){    // 'shade.k' | 'stack.<i>.k' | 'graph.<nodeid>.k'
+  const i1=path.indexOf('.'), i2=path.indexOf('.', i1+1);
+  const kind=path.slice(0,i1), a=path.slice(i1+1, i2<0?undefined:i2), b=i2<0?'':path.slice(i2+1);
+  if(kind==='shade') params[a]=value;
+  else if(kind==='stack'){ const op=(params.stack||[])[+a]; if(op) op[b]=value; }
+  else if(kind==='graph'){
+    const n=((params.graph||{}).nodes||[]).find(x=>x.id===a);
+    if(n){ n.params=n.params||{}; n.params[b]=value; }
+  }
+}
+function catSnapshot(){
+  const p = JSON.parse(JSON.stringify(shade));
+  if(NG.mode==='graph') p.graph = JSON.parse(JSON.stringify(NG.graph)); else delete p.graph;
+  return p;
+}
+// Thumbnails get their own renderer + camera so every card is framed identically
+// and the user's orbit (and the grid / base) never leaks into the catalogue.
+function catThumb(){
+  if(!shadeMesh) return null;
+  if(!CAT.rend){
+    CAT.rend = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+    CAT.rend.setPixelRatio(1); CAT.rend.setSize(420,420,false);
+    CAT.cam = new THREE.PerspectiveCamera(40,1,1,5000); CAT.cam.up.set(0,0,1);
+  }
+  const box = new THREE.Box3().setFromObject(shadeMesh);
+  if(box.isEmpty()) return null;
+  const c=box.getCenter(new THREE.Vector3()), s=box.getSize(new THREE.Vector3());
+  const r=Math.max(s.x,s.y,s.z);
+  CAT.cam.position.set(c.x + r*1.3, c.y - r*1.1, c.z + r*0.8);
+  CAT.cam.lookAt(c); CAT.cam.updateProjectionMatrix();
+  const gv=grid.visible, bv=baseMesh?baseMesh.visible:false, sz=shadeMesh.position.z;
+  grid.visible=false; if(baseMesh) baseMesh.visible=false; shadeMesh.position.z=0;
+  shadeMesh.visible=true;
+  CAT.rend.render(scene, CAT.cam);
+  const url = CAT.rend.domElement.toDataURL('image/png');
+  grid.visible=gv; if(baseMesh) baseMesh.visible=bv; shadeMesh.position.z=sz;
+  setVisibility();
+  return url;
+}
+function catProg(done, total, msg){
+  document.getElementById('catProg').textContent =
+    total ? `${Math.min(Math.floor(done),total)}/${total} · ${msg}` : msg;
+  const bar=document.getElementById('catBar');
+  bar.classList.add('on');
+  if(total) bar.firstElementChild.style.width=(100*done/total)+'%';   // total=0 -> message only
+}
+async function catPost(url, body){
+  const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  return r.json();
+}
+async function runCatalogue(){
+  if(CAT.running) return;
+  const A = catVals('A'), B = catVals('B');
+  if(!A){ showWarn(['Pick a parameter to sweep (and give it a from/to) first.']); return; }
+  const name = (document.getElementById('catName').value||'catalogue').trim();
+  const fast = document.getElementById('catFast').checked;
+  const subdir = 'catalogue/'+name;
+  const axes = [{label:A.axis.label, path:A.axis.path, from:A.vals[0],
+                 to:A.vals[A.vals.length-1], steps:A.vals.length}];
+  if(B) axes.push({label:B.axis.label, path:B.axis.path, from:B.vals[0],
+                   to:B.vals[B.vals.length-1], steps:B.vals.length});
+  const combos = [];
+  A.vals.forEach(va => B ? B.vals.forEach(vb=>combos.push([va,vb])) : combos.push([va]));
+
+  CAT.running=true; CAT.stop=false;
+  document.getElementById('catRun').disabled=true;
+  document.getElementById('catStop').disabled=false;
+  document.getElementById('catDone').textContent='';
+  const items=[]; const t0=performance.now();
+  try{
+    for(let i=0;i<combos.length;i++){
+      if(CAT.stop) break;
+      const combo=combos[i], p=catSnapshot();
+      combo.forEach((v,k)=>catApply(p, axes[k].path, v));
+      const short = combo.map((v,k)=>axes[k].label.split('·').pop().trim()+'='+v).join(', ');
+      const vname = 'v'+String(i+1).padStart(2,'0')+' '+combo.join('_');
+      // preview mesh -> render -> thumbnail
+      catProg(i, combos.length, 'rendering '+short);
+      let thumb=null;
+      const pd = await catPost('/api/shade', {params:p});
+      if(pd.ok){
+        applyShadeGeom(pd.vertices, pd.indices);
+        await new Promise(requestAnimationFrame);
+        thumb = catThumb();
+      }
+      // full export (this is the slow part)
+      catProg(i+0.5, combos.length, 'exporting '+short);
+      const ed = await catPost('/api/export_shade', {params:p, fast, dest:{subdir, name:vname}});
+      if(!ed.ok){
+        items.push({name:vname, values:combo, watertight:false, single_piece:false,
+                    printable:false, why:ed.error||'export failed'});
+        continue;
+      }
+      let trel='';
+      if(thumb){
+        const td = await catPost('/api/batch/thumb', {subdir, name:vname, png:thumb});
+        if(td.ok) trel = td.file;
+      }
+      const m = ed.metrics || {};
+      const why = !m.watertight ? 'not watertight'
+                : (m.components>1 ? m.components+' loose pieces' : '');
+      items.push({name:vname, values:combo, stl:ed.files.stl, thumb:trel, tris:m.tris,
+                  watertight:!!m.watertight, single_piece:m.components===1,
+                  components:m.components, printable:(m.watertight && m.components===1), why});
+      catProg(i+1, combos.length, short);
+    }
+    if(!items.length){ catProg(0,0,'nothing exported'); return; }
+    catProg(items.length, combos.length, 'writing contact sheet…');
+    const fin = await catPost('/api/batch/finish', {subdir, title:name, axes, items});
+    const bad = items.filter(x=>!x.printable).length;
+    if(fin.ok){
+      const secs=((performance.now()-t0)/1000).toFixed(0);
+      document.getElementById('catDone').innerHTML =
+        `${items.length} variant${items.length>1?'s':''} in ${secs}s`
+        + (bad?` · <span style="color:var(--warn)">${bad} not printable</span>`:'')
+        // A swept param can be inert for the current shape (pat_cols with no
+        // perforation op, say); the server hashes the STLs, so say so plainly.
+        + (fin.dupes?` · <span style="color:var(--warn)">${fin.dupes} identical — that axis does nothing here</span>`:'')
+        + ` — <a href="/view/${encodeURI(fin.files.index)}" target="_blank">contact sheet</a>`
+        + ` · <a href="/download/${encodeURI(fin.files.zip)}">zip</a>`;
+      catProg(combos.length, combos.length, CAT.stop?'stopped':'done');
+    } else showWarn([fin.error||'catalogue finish failed']);
+  }catch(e){ showWarn([''+e]); }
+  finally{
+    CAT.running=false;
+    document.getElementById('catRun').disabled=false;
+    document.getElementById('catStop').disabled=true;
+    runShade();                       // put the live shade back on screen
+  }
+}
+
 // ---- show toggle ----------------------------------------------------------
 function setShow(mode){
   showMode=mode;
@@ -577,6 +817,13 @@ document.getElementById('genBase').onclick = ()=>genBase(true);
 document.getElementById('genTestfit').onclick = genTestfit;
 document.getElementById('savePreset').onclick = savePreset;
 document.getElementById('presetSel').onchange = e=> loadPreset(e.target.value);
+// Axis lists depend on the current stack / graph, so rebuild them each time the
+// panel is opened rather than once at load.
+document.getElementById('catgrp').addEventListener('toggle', e=>{ if(e.target.open) catFill(); });
+document.getElementById('catAxA').onchange = ()=> catRange('A', true);
+document.getElementById('catAxB').onchange = ()=> catRange('B', true);
+document.getElementById('catRun').onclick = runCatalogue;
+document.getElementById('catStop').onclick = ()=>{ CAT.stop=true; catProg(0,0,'stopping after this variant…'); };
 
 // ---- field node graph (Phase 6) -------------------------------------------
 const NG = { reg:{}, graph:{nodes:[],edges:[]}, mode:'stack', pan:{x:40,y:20}, zoom:1, uid:1 };

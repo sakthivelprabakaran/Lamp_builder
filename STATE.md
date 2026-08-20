@@ -1,6 +1,120 @@
 # Lamp Studio — State log
 
-## Resume point (2026-08-19, latest)
+## Resume point (2026-08-20, latest)
+**Phase 4 — BATCH / CATALOGUE EXPORT is DONE + verified end-to-end.** Also fixed a
+bug-hunt batch (2 print-affecting mesh bugs, 2 UX bugs) and a viewer orientation bug
+that had been there since Phase 1.
+
+**Next when you resume**, pick from:
+- **Phase 2 base polish** — the base is too flat; the user deferred this twice, but it
+  is now the only unfinished roadmap phase.
+- **Physical print validation** of the twist-lock / `fit_clr` against a real holder
+  (Test-fit ring button exists for exactly this; nothing has been printed yet).
+- **Remaining findings from the 2026-08-20 hunt** (see that section): #4 dead graph
+  warnings, #6 preview-vs-export resolution mismatch, #7 slow (~26 s) full-res export
+  with no feedback/timeout, #9 minors.
+- More Phase 6 nodes (image-map, curve/ramp, polar, warp-Z, SDF).
+
+## Bug hunt + Phase 4 session (2026-08-20)
+
+### Fixed: 2 print-affecting mesh bugs (`c34a8e8`)
+1. **Inverted hole-rim normals.** `_hole_rims` wound the two theta-facing rim families
+   backwards, so every perforated shade shipped thousands of inverted facets. Invisible
+   to `verify_mesh` — it counts *undirected* edges, so a consistently-wrong winding
+   still reads as watertight. Caught by counting **duplicated directed edges** (in a
+   correctly wound closed mesh every directed edge appears exactly once) and confirmed
+   with signed volume `Σ a·(b×c)/6 > 0`. honeycomb 10994→0 dup edges, grid 7112→0,
+   voronoi 8376→0, gyroid 27448→0.
+2. **Unsealed holes in the first/last cell row.** The cap rings are emitted for every
+   column and `_hole_rims` treats off-grid row neighbours as solid, so a hole in row 0
+   or row -1 was left open (boundary + non-manifold edges). Fix: force those two rows
+   solid before `_declink` (which only ever fills, so it can't undo it).
+   `top_solid=0` cases: honeycomb 212 bnd/24 nonman→0/0, voronoi 206/16→0/0, graph
+   276/20→0/0.
+
+### Fixed: 2 UX bugs (`d31bd37`)
+3. **Base was never marked stale by shade/graph edits.** Every base dimension is
+   derived from shade params (`_base_dims`/`bayonet_geometry`), so moving a shade
+   slider silently left a base on screen that would no longer mate. Fix: fingerprint
+   exactly the base-relevant keys + the effective `r_bottom` (which may live in a
+   stack or graph `form` node) and re-check after every shade regen — one hook covers
+   sliders, graph edits, stack edits and preset loads.
+5. **Camera refit on every base rebuild** fought the user's orbit while base sliders
+   live-regenerated. Now only frames on first appearance (a view change still fits).
+
+### Fixed: the viewer was Z-up-blind (this session, shipped with Phase 4)
+The engine builds **Z-up** (height along +Z, z=0 = the print bed) but three.js
+defaults to Y-up, so **every lamp had been rendering on its side since Phase 1**, with
+the grid slicing through it. Nobody noticed because the shapes are near-symmetric.
+Fix: `THREE.Object3D.DEFAULT_UP.set(0,0,1)` **before** the camera/controls exist (so
+OrbitControls orbits about Z too), `camera.up`, `grid.rotation.x = π/2` to lay the
+GridHelper on the XY bed, and a Z-up 3/4 `fitCamera` position. Found while planning
+Phase 4 — catalogue thumbnails would have inherited it. `screenshots/zup_fixed.png`.
+
+### Phase 4 — batch / catalogue export
+**The sweep runs in the browser, not the server.** Only the browser can render a
+thumbnail, and a client-side loop gives progress + Stop without the server owning any
+long-running job state. The server just writes files.
+- UI: `▦ Catalogue (batch export)` panel — name, 1 or 2 sweep axes (each with
+  from/to/steps, capped at 12), a *Fast (preview resolution)* checkbox, Run/Stop, a
+  progress bar and result links. Axis list is rebuilt each time the panel opens and
+  offers **26 axes**: flat shade sliders + whichever of the stack ops / graph nodes is
+  live (`shade.<k>` / `stack.<i>.<k>` / `graph.<nodeid>.<k>`).
+- Thumbnails use their own offscreen `WebGLRenderer` (420×420,
+  `preserveDrawingBuffer`) + own camera, so every card is framed identically and the
+  user's orbit / grid / base never leak in.
+- Server: `dest:{subdir,name}` on `/api/export_shade` (so a run can't race the shared
+  `output/shade.stl`), `POST /api/batch/thumb`, `POST /api/batch/finish` → writes
+  `manifest.csv` + a dark-themed `index.html` contact sheet, then zips the folder.
+- **New `GET /view/<rel>`** serves `output/` **inline** (html/png/csv/json/stl only) —
+  `/download/` forces `Content-Disposition: attachment`, which is right for STLs but
+  makes the contact sheet undisplayable. STL links in the sheet stay **relative** so
+  the copy inside the zip still works offline.
+- **Inert-axis detection.** A swept param can do nothing to the current shape (e.g.
+  `pat_cols` when the stack has no perforation op) and the user would wait out the
+  whole sweep for clones. Equal triangle counts don't prove it, so `finish` md5s the
+  written STLs, flags `dup_of` in the manifest, dims the card in the sheet, and the
+  panel says "N identical — that axis does nothing here".
+- Path safety: `_safe_out()` normalises + `commonpath`-checks every caller-supplied
+  path (batch exports name their own files); `_slug_path()` slugs each segment so
+  `catalogue/name` doesn't collapse to `catalogue_name`.
+- Verified end-to-end in headless Chromium: 2-axis sweep (`shade.pat_cols` × `stack.0.
+  r_top`, 2×2) → 4 STLs + 4 thumbnails + manifest + sheet + 10-entry zip; contact
+  sheet loads through `/view/` with 0 broken images; the 2 inert-axis clones are
+  detected; 3 traversal attempts on `/view/` all 404.
+  Harness: `%TEMP%\lampstudio_cat_e2e.py` (kept out of the repo).
+
+### Still open from the hunt (not fixed)
+- **#4** `graph_engine.evaluate()` builds warnings that are never returned — dead code.
+- **#6** preview caps `res_theta`/`res_z` (160/120) but export doesn't, so what you
+  see is not what you print at full res.
+- **#7** full-res export takes ~26 s (`_perforation_solid` is float64 with a fixed
+  `step=4096`) with no timeout and no progress feedback.
+- **#9** minors: STL is still downloaded when the mesh fails the "do not print" gate;
+  `_form_params` takes the first `form` node even if it is unwired; `addNode`/
+  `fitGraph` ignore `NG.zoom`; `BaseWorker.run` holds `self._lock` across the full
+  300 s join.
+- **#8** (`json.loads` outside the `try` in `do_POST`) was fixed incidentally by Phase 4.
+
+### Lessons from this session
+- **`verify_mesh` cannot see winding.** Undirected-edge counting says "watertight" for
+  a fully inverted mesh. Any future mesh change wants the directed-edge + signed-volume
+  check, not just `verify_mesh`.
+- **Never sleep in a Playwright harness** — poll with `wait_for(...)` on the expected
+  condition. Two "app bugs" this session were fixed 3 s sleeps reading `window.__shade`
+  before the browser applied the response. Direct API probes disproved both.
+- **Module scope isn't `window`.** The UI is an ES module, so a harness can only see
+  the deliberate hooks: `window.LS`, `__shade`, `__base`, `__cam()`, `__orient()`.
+- **Windows `SO_REUSEADDR` will happily double-bind 8776.** `ThreadingHTTPServer` sets
+  `allow_reuse_address=1`, so a second `server.py` binds silently and requests land on
+  either process at random — API probes then hit stale code. Check
+  `netstat -ano | grep :8776` before believing a probe. `pkill -f server.py` does not
+  work here; use `taskkill //PID <n> //F` (and kill the orphaned workers too).
+- **No heredocs in this environment** (`python - <<EOF` hangs on a fork failure). Use
+  `Write` for scripts and `python -c` for one-liners. Keep diagnostics in `%TEMP%`,
+  never in the repo.
+
+## Resume point (2026-08-19)
 **Repo is now git-initialised** (branch `main`, first commit = Phases 1–5).
 **Phase 6 — FIELD NODE GRAPH is DONE + verified** (Grasshopper-style, user wanted
 "very very complex patterns"). New `graph_engine.py` (29 node types), integrated
@@ -241,7 +355,9 @@ preset load (Deep Flute Cone → 16 flutes, sliders + geometry updated), base bu
 - **Phase 1** ✅ continuous-wall family (form/flutes/twist/ripple/noise) + base + Studio UI.
 - **Phase 2** base polish: twist-bayonet / 3-tab snap join, socket-standard dims, cord strain relief.
 - **Phase 3** perforation patterns via SDF/mesh (honeycomb, voronoi, gyroid, box lattice) + overhang guardrail.
-- **Phase 4** batch/catalogue export (grid of variations → STL set + thumbnails).
+- **Phase 4** ✅ batch/catalogue export — 1–2 axis sweep over any shade / stack / graph
+  param → STL set + thumbnails + contact sheet + manifest + zip, with inert-axis
+  detection. Client-orchestrated (see the 2026-08-20 section).
 - **Phase 5** ✅ operator-stack editor over the same operator backend (linear stack;
   add/reorder/mute/remove ops).
 - **Phase 6** ✅ FIELD NODE GRAPH (Grasshopper-style, `graph_engine.py`, 29 nodes,
