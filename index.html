@@ -252,6 +252,16 @@ const BASE_CTRL = [
   ['Holder','screw_spacing','Screw pitch',15,45,1],
   ['Holder','screw_dia','Screw Ø',2.5,5,0.1],
   ['Holder','cord_slot','Cord slot',0,10,0.5],
+  ['LED module','led_dia','Module rim Ø',40,110,0.5],
+  ['LED module','led_core_dia','Core Ø (steps down)',30,110,0.5],
+  ['LED module','led_depth','Module depth',5,30,0.5],
+  ['LED module','led_rim_t','Rim thickness',0,10,0.5],
+  ['LED module','led_fit','Bore clearance Ø',0,1,0.05],
+  ['LED module','led_grip','Fin grip Ø',0,1.2,0.05],
+  ['LED module','led_fins','Grip fins',0,12,1],
+  ['LED module','led_fin_w','Fin Ø',1,4,0.1],
+  ['LED module','led_fin_h','Fin height',2,12,0.5],
+  ['LED module','led_floor','Floor under module',2,10,0.5],
 ];
 
 let defaults = {shade:{}, base:{}};
@@ -390,7 +400,7 @@ function buildControls(){
   add(SHADE_CTRL, shade); add(BASE_CTRL, base);
   order.forEach(g=>{
     const det = document.createElement('details'); det.className='grp'; det.dataset.group=g;
-    det.open = !['Quality','Base','Organic','Holder','Twist-lock'].includes(g);
+    det.open = !['Quality','Base','Organic','Holder','Twist-lock','LED module'].includes(g);
     det.innerHTML = `<summary>${g}</summary>`;
     const body = document.createElement('div'); body.className='body';
     if(g==='Perforation'){  // pattern is a dropdown, not a slider
@@ -418,8 +428,19 @@ function buildControls(){
           <option value="b22">B22 holder (recess + 2 screws)</option>
           <option value="e27">E27 holder (recess)</option>
           <option value="ikea">IKEA cord set (recess)</option>
+          <option value="led">Round surface LED module (press-fit pocket)</option>
         </select>
         <div class="tiny">Dimensions are nominal — print a test-fit ring to check your real holder.</div>`;
+      body.appendChild(row);
+    }
+    if(g==='LED module'){
+      const row = document.createElement('div'); row.className='row';
+      row.innerHTML = `<div class="tiny">Only used when Holder type is
+        <b>Round surface LED module</b>. Buy the module, drop it in rim-up: it enters on a
+        loose bore, then grip fins bite the core so it holds without glue and the lit
+        face finishes flush. Defaults suit a Panasonic PDLM2803 (68 mm rim / 61 mm core /
+        14 mm deep). Print the <b>test-fit ring</b> and raise <i>Fin grip Ø</i> if it is loose,
+        lower it if it will not go in.</div>`;
       body.appendChild(row);
     }
     groups[g].forEach(c=>{
@@ -543,7 +564,7 @@ async function genBase(dl){
     const r = await fetch('/api/base',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({params:base, shade_params:shade, export:true})});
     const d = await r.json();
-    if(d.ok){ applyBaseGeom(d.positions); baseDirty=false;
+    if(d.ok){ applyBaseGeom(d.positions); baseDirty=false; showWarn(d.warnings);
       hud(`base ${d.metrics.triangles.toLocaleString()} tris • ${d.metrics.volume_mm3} mm³`);
       if(dl!==false) download('/download/base.stl'); }
     else showWarn([d.error||'base failed']);

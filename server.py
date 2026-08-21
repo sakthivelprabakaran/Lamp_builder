@@ -341,7 +341,17 @@ class Handler(BaseHTTPRequestHandler):
                        "outdir": OUTDIR, "tolerance": req.get("tolerance", 0.2),
                        "export": req.get("export", True),
                        "kind": "testfit" if self.path == "/api/testfit" else "base"}
-                return self._send(200, json.dumps(WORKER.run(job)))
+                res = WORKER.run(job)
+                # Fit guardrails are pure arithmetic on the params, so compute them
+                # here rather than paying a worker round-trip -- and so they still
+                # reach the user when the build itself fails.
+                try:
+                    warn = lamp_engine.led_fit_warnings(job["params"], job["shade_params"])
+                except Exception:
+                    warn = []
+                if warn:
+                    res["warnings"] = list(res.get("warnings") or []) + warn
+                return self._send(200, json.dumps(res))
             if self.path == "/api/preset/save":
                 return self._send(200, json.dumps(_save_preset(req)))
         except Exception as e:

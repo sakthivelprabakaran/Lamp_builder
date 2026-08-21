@@ -1,6 +1,50 @@
 # Lamp Studio — State log
 
-## Resume point (2026-08-20, latest) — WOVEN RATTAN pattern
+## Resume point (2026-08-21, latest) — LED MODULE POCKET in the base
+**`holder_type="led"` is DONE + verified**: a press-fit pocket so a bought round
+surface-mount LED module drops straight into the base. Sized for the user's Panasonic
+**PDLM2803BR12** (68 mm rim / 61 mm core / 14 mm deep — see the caveat below).
+
+**How it works.** The module is a stepped disc, so the pocket is a counterbore: a rim
+recess on top (the lit face finishes flush with the plate) over a core bore below, with
+the rim landing on the step as the depth stop.
+
+The grip is deliberately **not** the bore. A bore cut to a press fit does not work on
+FDM — the hole lands 0.1–0.3 mm off nominal, so one file is either impossible to insert
+or rattles. So the bore is cut *loose* by `led_fit` and six short cylindrical fins stand
+`led_grip`/2 proud of it. They sit at the bottom of the bore, so the module enters on the
+loose bore and self-centres before anything has to give; they stand on the pocket floor,
+so they print as plain vertical walls. `led_grip` is the one number to tune after a test
+print. Cylinders, not square ribs: a rolling contact beds in instead of digging a groove.
+
+The plate **auto-thickens** (5 → 18 mm) because a 14 mm pocket cannot be sunk into a 5 mm
+plate; this happens before the lug/collar heights are derived, so the bayonet rides up
+with it and still mates (verified: lug tip 46.70 vs shade channel 47.70). Wires exit
+through the existing centre bore and the underside cord slot.
+
+Verified by **measuring the built solid** (bisection on `BRepClass3d_SolidClassifier`,
+not by re-reading the inputs): rim recess Ø68.29, core bore Ø61.29 clear above the fins,
+Ø60.69 on a fin (0.31 mm interference on Ø, requested 0.30) and Ø61.29 between fins —
+i.e. six discrete contacts, not a merged sleeve. Floor 4.0 mm solid, wire bore through,
+7.35 mm of collar footing. All five holder types still build valid solids and only `led`
+thickens its plate. Preset: `presets/Rattan Gourd + LED Module.json` (r_bottom widened
+44 → 50: at 44 the pocket left only 1.35 mm of collar footing).
+
+**Open on this thread:**
+- **The 68/61/14 figures are from a spec sheet the user pasted, not from calipers**, and
+  the rim/core thickness split (`led_rim_t=3.0`) is a guess — a spec sheet almost never
+  states it. Mitigated three ways: every figure is a slider, the test-fit ring is a 10 mm
+  / 20-minute print that proves the fit before the 3–4 h base, and `led_rim_t=0` falls
+  back to a plain straight bore at the rim Ø (module sits proud rather than flush, which
+  is a far better failure than a pocket it cannot enter).
+- The 18 mm plate is solid: 134 cm³ of *volume*, but slicer infill decides the mass. If it
+  still prints too slowly, the fix is an annular relief on the underside leaving the outer
+  rim at the requested thickness — worth ~37% — but the relief's ceiling is a ~14 mm
+  circular bridge, so it wants a conical draft to stay support-free. Not attempted.
+- The collar rises 16.5 mm above the module face and surrounds it at r 41.5–44.5, so it
+  clips the very edge of the beam. Harmless (the shade's own collar is opaque there).
+
+## Resume point (2026-08-20) — WOVEN RATTAN pattern
 **A `weave` (woven rattan / cane cage) pattern is DONE + verified**, added on request
 from a reference photo of a woven pendant lamp. It is the first pattern that is mostly
 OPEN — the mask is the cane itself, not a web around holes — and the first whose widths
@@ -20,9 +64,9 @@ for a requested 4.0 mm cane. Preset: `presets/Woven Rattan Gourd.json`.
 - The user's Amazon link is **not** the pendant in the photo — it is a Panasonic
   **PDLM2803BR12, 3 W round mini modular surface downlighter** (a small cabinet light).
   So it is the LIGHT SOURCE to mount, not a silhouette reference. amazon.in returns
-  HTTP 500 to WebFetch and DuckDuckGo/Moglix are blocked too, so its body diameter and
-  depth are still unknown — needed before the shade's top mount / base bore can be
-  dimensioned to it. ASK THE USER for the "Product Dimensions" line.
+  HTTP 500 to WebFetch and DuckDuckGo/Moglix are blocked too; the user supplied the
+  dimensions by hand on 2026-08-21 and the base now has a pocket for it (see the
+  2026-08-21 section).
 - The gourd silhouette (230 tall × 228 wide) was read off the photo's proportions, not
   from the product listing.
 
@@ -363,6 +407,20 @@ preset load (Deep Flute Cone → 16 flutes, sliders + geometry updated), base bu
   nipple vs a specific IKEA cord set) so the collar/bore can be dimensioned to it.
 
 ## Lessons learned
+- **Never put a press fit on a bore.** FDM holes land 0.1–0.3 mm off nominal, so a bore
+  cut to an interference is a coin flip between "won't go in" and "rattles" — and the same
+  STL behaves differently on two printers. Put the interference on a few small features
+  (fins, crush ribs) that bed in, and cut the bore deliberately loose. One tunable number,
+  and the failure mode is "shave a fin" rather than "reprint the part".
+- **A fit test must measure the solid, not re-read the parameters.** Bisecting a
+  point-in-solid test (`BRepClass3d_SolidClassifier`) along a radius recovers exactly what
+  the module cares about — how wide the hole is at that height — and it catches the whole
+  class of bug where a cut lands on the wrong plane. It also proved the fins stayed six
+  discrete contacts instead of merging into a sleeve, which no parameter check could.
+- **Derive dependent heights AFTER the auto-fit, not before.** The LED pocket thickens the
+  plate 5 → 18 mm; the bayonet lug height is `plate_thick + pocket_center`, so raising the
+  plate one line too late would have left the lugs 13 mm low and silently broken the mate
+  on a part that still built and still looked right.
 - **Name a parameter in the unit the user thinks in.** The weave's `turns` started as a
   PHASE coefficient, so `turns=1.0` shifted a cane by one strand spacing over the whole
   height — visually vertical, and the two families ran near-parallel so they never

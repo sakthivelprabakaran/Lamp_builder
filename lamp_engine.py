@@ -95,6 +95,20 @@ BASE_DEFAULTS = dict(
     screw_dia=3.4,         # mounting-screw clearance hole (mm)
     cord_slot=5.0,         # underside cord-exit slot width (mm, 0 = none)
     lug_arc_trim=3.0,      # lug arc = channel_w - this, so it enters the channel (deg)
+    # --- round surface-mount LED module pocket (holder_type="led") ---
+    # Sized for a Panasonic PDLM2803 mini surface downlighter: 68 mm rim, 61 mm core
+    # that steps down behind it, 14 mm deep. Every figure is a slider because those
+    # came off a spec sheet, not off calipers.
+    led_dia=68.0,          # module rim / lit-face diameter (mm)
+    led_core_dia=61.0,     # narrower body stepping down behind the rim (mm)
+    led_depth=14.0,        # overall module thickness (mm)
+    led_rim_t=3.0,         # rim thickness -- how deep the flush recess is (mm)
+    led_fit=0.3,           # bore clearance on DIAMETER -- deliberately loose (mm)
+    led_grip=0.3,          # fin interference on DIAMETER -- this IS the tight fit (mm)
+    led_fins=6,            # grip fins around the core bore (0 = plain bore)
+    led_fin_w=2.0,         # grip fin diameter (mm)
+    led_fin_h=6.0,         # grip fin height (mm)
+    led_floor=4.0,         # material left under the pocket (mm)
 )
 
 
@@ -739,12 +753,93 @@ def weave_res_warning(params, res_theta):
 #  Base adapter  (build123d BREP -- imported lazily)
 # --------------------------------------------------------------------------- #
 
+def led_pocket_dims(d):
+    """Resolve the surface-LED pocket. Returns None unless holder_type == "led".
+
+    The module is a stepped disc -- a `led_dia` rim carrying the lit face, with a
+    narrower `led_core_dia` body behind it -- so the pocket is a counterbore: rim
+    recess on top, core bore below. The rim lands on the step, which is what sets
+    insertion depth and leaves the lit face flush with the plate.
+
+    The grip is deliberately NOT the bore. A bore cut to a press fit does not work
+    on FDM: the hole lands 0.1-0.3 mm off nominal, so one file is either impossible
+    to insert or rattles. So the bore is cut loose by `led_fit` and a few short fins
+    stand `led_grip`/2 proud of it -- a handful of small contacts that bed in on the
+    way past, which is both tunable and forgiving of printer spread.
+    """
+    if str(d.get("holder_type", "m10")).lower() != "led":
+        return None
+    fit = float(d["led_fit"])
+    dia, core = float(d["led_dia"]), float(d["led_core_dia"])
+    depth, rim_t = float(d["led_depth"]), float(d["led_rim_t"])
+    stepped = rim_t >= 0.8 and dia - core >= 1.0 and rim_t <= depth - 2.0
+    if not stepped:
+        # Plain straight bore instead. The rim/core split is exactly the figure a
+        # spec sheet omits, and a straight bore at the rim diameter still holds a
+        # stepped module -- it just sits proud instead of flush, which is a far
+        # better failure than a pocket the module cannot enter at all.
+        core, rim_t = dia, 0.0
+    core_depth = depth - rim_t
+    return {
+        "stepped": stepped,
+        "rim_r": (dia + fit) / 2.0,
+        "rim_t": rim_t,
+        "core_r": (core + fit) / 2.0,
+        "core_depth": core_depth,
+        "depth": depth,
+        "grip_r": (core - float(d["led_grip"])) / 2.0,
+        "fins": int(d["led_fins"]),
+        "fin_w": float(d["led_fin_w"]),
+        "fin_h": min(float(d["led_fin_h"]), core_depth - 1.0),
+        "min_plate": depth + float(d["led_floor"]),
+    }
+
+
+def led_fit_warnings(params, shade_params=None):
+    """Guardrails for the LED pocket: it has to fit inside the bayonet collar, and
+    the numbers it is cut to are only as good as the spec sheet they came from."""
+    d, _ = _base_dims(params, shade_params)
+    lp = d.get("led")
+    if not lp:
+        return []
+    out = []
+    # The pocket is cut into the plate top -- which is also where the collar stands.
+    # Overrun it and the collar loses its footing, so keep 1 mm of shoulder.
+    room = d["collar_r"] - d["seat_wall"] - 1.0
+    if lp["rim_r"] > room:
+        r_bottom = d["plate_r"] - d["rim_over"]
+        out.append("The %.0f mm module needs a %.1f mm pocket radius but the bayonet "
+                   "collar leaves only %.1f mm -- raise the shade's bottom radius to "
+                   "about %.0f mm, or thin the collar wall."
+                   % (d["led_dia"], lp["rim_r"], room,
+                      math.ceil(r_bottom + lp["rim_r"] - room)))
+    if not lp["stepped"]:
+        out.append("Rim thickness / core diameter do not describe a step, so the pocket "
+                   "is a plain %.1f mm bore %.1f mm deep and the module will sit proud "
+                   "of the plate rather than flush." % (d["led_dia"], lp["depth"]))
+    req = float(params.get("plate_thick", BASE_DEFAULTS["plate_thick"]))
+    if d["plate_thick"] > req + 1e-6:
+        out.append("Plate thickened %.0f -> %.0f mm so the %.0f mm module gets a %.0f mm "
+                   "floor under it." % (req, d["plate_thick"], lp["depth"], d["led_floor"]))
+    out.append("Module dimensions are from a spec sheet, not calipers: print the test-fit "
+               "ring first and tune Fin grip until it presses in firmly by hand. Print in "
+               "PETG or ABS -- the module runs warm enough to soften PLA.")
+    return out
+
+
 def _base_dims(params, shade_params):
     """Resolve every base dimension, coupling the collar + lugs to the shade's
     bayonet so the two parts actually mate."""
     b = dict(BASE_DEFAULTS); b.update({k: params[k] for k in params if k in BASE_DEFAULTS})
     sp = dict(SHADE_DEFAULTS); sp.update(shade_params or {})
     sp.update(_form_params(shade_params or {}))    # resolve graph/stack form -> mate the parts
+    led = led_pocket_dims(b)
+    if led:
+        # A 14 mm pocket cannot be sunk into a 5 mm plate. Thicken the plate rather
+        # than let the pocket cut out through the underside: the module has to bottom
+        # out on a real floor, and plate mass is what steadies a lamp anyway. Do it
+        # BEFORE the lug/collar heights are derived so they ride up with it.
+        b["plate_thick"] = max(float(b["plate_thick"]), led["min_plate"])
     g = bayonet_geometry(sp)
     d = dict(b)
     d["collar_r"] = g["base_collar_r"]                 # collar outer radius
@@ -755,6 +850,7 @@ def _base_dims(params, shade_params):
     d["lug_arc_deg"] = max(4.0, g["channel_w_deg"] - b["lug_arc_trim"])
     d["plate_r"] = sp["r_bottom"] + b["rim_over"]      # shade outer + overhang
     d["pocket_h"] = sp["pocket_h"]
+    d["led"] = led
     return d, g
 
 
@@ -815,6 +911,9 @@ def _cut_holder_mount(part, d, BuildSketch, Circle, RegularPolygon, Rectangle,
     # this nested function call.
     ht = str(d.get("holder_type", "m10")).lower()
     plate_t = d["plate_thick"]
+    if ht == "led":
+        _cut_led_pocket(part, d, BuildSketch, Circle, PolarLocations, extrude, Mode, Plane)
+        return
     if ht == "m10":
         # Across-corners hexagonal lock-nut pocket cut up from the underside.
         with BuildSketch(Plane.XY) as sk:
@@ -833,11 +932,61 @@ def _cut_holder_mount(part, d, BuildSketch, Circle, RegularPolygon, Rectangle,
         extrude(to_extrude=sk.sketch, amount=plate_t, mode=Mode.SUBTRACT)
 
 
+def _cut_led_pocket(part, d, BuildSketch, Circle, PolarLocations, extrude, Mode, Plane,
+                    top_z=None, thru=False):
+    """Counterbored pocket for a round surface-mount LED module, gripped by fins.
+
+    Cut downward from the plate top so the lit face finishes flush: rim recess,
+    then the core bore, then the fins added back into the core bore. See
+    `led_pocket_dims` for why the grip lives on the fins and not on the bore.
+    """
+    lp = d["led"]
+    top = d["plate_thick"] if top_z is None else float(top_z)
+    if lp["rim_t"] > 0:
+        with BuildSketch(Plane.XY.offset(top)) as sk:
+            Circle(lp["rim_r"])
+        extrude(to_extrude=sk.sketch, amount=-lp["rim_t"], mode=Mode.SUBTRACT)
+    shelf = top - lp["rim_t"]                       # the face the rim lands on
+    # On the test-fit ring the core bore goes right through, so the module pushes
+    # back out with a thumb instead of needing to be prised out of a blind pocket.
+    core_depth = shelf if thru else lp["core_depth"]
+    with BuildSketch(Plane.XY.offset(shelf)) as sk:
+        Circle(lp["core_r"])
+    extrude(to_extrude=sk.sketch, amount=-core_depth, mode=Mode.SUBTRACT)
+    # Grip fins: cylinders rather than square ribs, so the contact is a rolling
+    # curve that beds in instead of a corner that digs a groove, and so there is no
+    # sharp internal corner for the slicer to fill badly. They sit at the BOTTOM of
+    # the bore -- the module then enters on the loose bore and is already centred
+    # before anything has to give -- and they stand on the floor, so they print as
+    # plain vertical walls with no overhang.
+    fin_h = min(lp["fin_h"], core_depth - 0.5)
+    if lp["fins"] > 0 and lp["fin_w"] > 0.4 and fin_h > 1.0:
+        with BuildSketch(Plane.XY.offset(shelf - core_depth)) as sk:
+            with PolarLocations(lp["grip_r"] + lp["fin_w"] / 2.0, lp["fins"]):
+                Circle(lp["fin_w"] / 2.0)
+        extrude(to_extrude=sk.sketch, amount=fin_h, mode=Mode.ADD)
+
+
 def build_testfit_ring(params, shade_params=None):
     """A short disc carrying only the holder mount -- a ~10-minute print to check
     that a real, purchased holder fits before committing a full base."""
     from build123d import BuildPart, BuildSketch, Circle, extrude, Mode, Plane
+    from build123d import PolarLocations as _PolarLocations
     d, _ = _base_dims(params, shade_params)
+    if d.get("led"):
+        # Only deep enough to prove the two diameters and the grip force -- the full
+        # 18 mm plate would be an hour of printing to answer a question a 9 mm ring
+        # answers. Open bottom, so the module comes back out.
+        lp = d["led"]
+        h = lp["rim_t"] + min(lp["core_depth"], 7.0)
+        r = lp["rim_r"] + 5.0
+        with BuildPart() as part:
+            with BuildSketch():
+                Circle(r)
+            extrude(amount=h)
+            _cut_led_pocket(part, d, BuildSketch, Circle, _PolarLocations, extrude,
+                            Mode, Plane, top_z=h, thru=True)
+        return part.part
     h = d["plate_thick"] + (0 if str(d["holder_type"]).lower() == "m10" else d["holder_depth"]) + 3.0
     r = (d["holder_dia"] / 2.0 + 5.0) if str(d["holder_type"]).lower() != "m10" \
         else (d["nut_dia"] / 2.0 + 5.0)
