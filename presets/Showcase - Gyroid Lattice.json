@@ -21,7 +21,7 @@
           "y": 230,
           "params": {
             "period_u": 8,
-            "period_v": 10
+            "period_v": 5
           }
         },
         {
@@ -30,7 +30,7 @@
           "x": 300,
           "y": 90,
           "params": {
-            "amp": 0.05,
+            "amp": 0.0,
             "mode": 1
           }
         },
@@ -70,7 +70,10 @@
       ]
     },
     "height": 190,
-    "wall": 1.2
+    "wall": 1.2,
+    "res_theta": 240,
+    "res_z": 240,
+    "pat_rows": 5
   },
   "base": {}
 }

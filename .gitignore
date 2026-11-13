@@ -4,3 +4,8 @@ screenshots/
 *.out
 __pycache__/
 *.pyc
+
+.DS_Store
+tmp/
+.env
+.env.*

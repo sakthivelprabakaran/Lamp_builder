@@ -20,8 +20,8 @@
           "x": 40,
           "y": 230,
           "params": {
-            "cells_u": 10,
-            "cells_v": 12,
+            "cells_u": 18,
+            "cells_v": 5,
             "jitter": 0.55,
             "metric": 1,
             "seed": 9
@@ -42,7 +42,7 @@
           "x": 470,
           "y": 90,
           "params": {
-            "amp": 0.12,
+            "amp": 0.0,
             "mode": 1
           }
         },
@@ -87,7 +87,10 @@
       ]
     },
     "height": 190,
-    "wall": 1.2
+    "wall": 1.2,
+    "res_theta": 240,
+    "res_z": 240,
+    "pat_rows": 5
   },
   "base": {}
 }

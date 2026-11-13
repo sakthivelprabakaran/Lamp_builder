@@ -27,6 +27,7 @@ import math
 import struct
 import numpy as np
 
+import print_geometry
 import graph_engine        # Phase 6 field node-graph (pure numpy, no new deps)
 
 
@@ -35,6 +36,7 @@ import graph_engine        # Phase 6 field node-graph (pure numpy, no new deps)
 # --------------------------------------------------------------------------- #
 
 SHADE_DEFAULTS = dict(
+    support_free=1,        # upright A1 / 0.4 mm nozzle geometric constraints
     height=180.0,          # overall height (mm)
     r_bottom=70.0,         # radius at the base
     r_top=55.0,            # radius at the top
@@ -56,7 +58,9 @@ SHADE_DEFAULTS = dict(
     pat_cols=14,           # pattern cells around the circumference (weave: cane count)
     pat_rows=10,           # pattern cells up the height
     web=0.28,              # strut thickness (0..1 of cell spacing; bigger = less open)
-    pat_seed=7,            # random seed (voronoi)
+    pat_seed=7,
+    pat_hole_mm=3.2,       # fine rounded aperture width; crown is self-supporting
+    pat_distribution="uniform", # uniform | graded | botanical            # random seed (voronoi)
     # --- woven rattan cage (pattern="weave"): unlike the other patterns this is
     # mostly OPEN -- the mask is the cane itself -- and its widths are real mm, so a
     # bulged form keeps an even-looking cane instead of fattening at the equator.
@@ -299,7 +303,7 @@ def _bayonet_inner(theta, z, p, mount_r, channel_r):
     cw = math.radians(p["channel_w_deg"])
     lw = math.radians(p["lock_w_deg"])
     pz0, ph = p["pocket_z0"], p["pocket_h"]
-    cham = 1.8                                  # 45deg-ish ledge chamfer height
+    cham = max(1.8, (channel_r - mount_r) / print_geometry.MAX_RADIAL_SLOPE)                                  # 45deg-ish ledge chamfer height
 
     a = np.mod(theta, period)                   # local angle within one lug period
     r = np.full(theta.shape, mount_r)
@@ -454,7 +458,11 @@ def build_shade_mesh(params):
     nt = max(24, int(p["res_theta"]))
     nz = max(4, int(p["res_z"]))
     H = float(p["height"])
-    wall = max(0.4, float(p["wall"]))
+    wall = float(p["wall"])
+    if not math.isfinite(H) or H <= 0 or H > 250:
+        raise ValueError("Height must be greater than zero and at most 250 mm for the A1 design envelope.")
+    if not math.isfinite(wall) or wall < 0.8:
+        raise ValueError("Wall must be at least 0.8 mm (two nominal nozzle widths).")
 
     bayo = bool(p["bayonet"]) and p["collar_h"] > 0 and p["collar_wall"] > 0
     collar_h = float(p["collar_h"]) if bayo else 0.0
@@ -499,6 +507,53 @@ def build_shade_mesh(params):
         prof = np.array([_profile_radius(float(zz), p) for zz in zf1d])[:, None]
         r_out = np.where(collar, r_out, prof + (r_out - prof) * w)
         r_in = np.where(collar, r_in, np.maximum(r_out - wall, 0.5))
+
+    if p["support_free"]:
+        r_out, r_in, _ = print_geometry.constrain_shell(
+            r_out, r_in, z[:, 0], wall, collar_h)
+        if np.max(r_out) > 125:
+            raise ValueError("Shade diameter exceeds the 250 mm A1 design envelope.")
+        has_holes = graph_engine.output_wants(graph, "holes") if graph else p["pattern"] != "none"
+        if has_holes:
+            cols, rows = int(p["pat_cols"]), int(p["pat_rows"])
+            style = str(p["pattern"])
+            if graph:
+                nodes = graph.get("nodes", [])
+                pattern_node = next((n for n in nodes if n.get("type") in ("weave", "gyroid", "voronoi")), {})
+                gp = pattern_node.get("params", {})
+                style = pattern_node.get("type", "graph")
+                cols = int(gp.get("cols", gp.get("cells_u", gp.get("period_u", 7) * 2)))
+                rows = int(gp.get("cells_v", gp.get("period_v", p["pat_rows"])))
+            cols = max(4, min(120 if style == "micro_round" else 40, cols)); rows = max(2, min(60 if style == "micro_round" else 30, rows))
+            if graph:
+                # Area occupancy rather than a single centre sample: prevents
+                # graph frequency/tiling aliasing from erasing entire families.
+                lo = max(collar_h + 3.2, 3.2)
+                hi = H - max(float(graph_engine.output_param(graph, "top_solid", p["top_solid"])), 1.6)
+                zv = lo + (np.arange(rows * 4) + .5) / (rows * 4) * (hi - lo)
+                th = 2 * math.pi * (np.arange(cols * 4) + .5) / (cols * 4)
+                TH, ZF = np.meshgrid(th, zv / H)
+                holes = graph_engine.evaluate(graph, TH, ZF, zv / H, need_radius=False)["holes"]
+                fraction = holes.reshape(rows, 4, cols, 4).mean(axis=(1, 3))
+                opening = np.where(fraction > .1, .78 + .16 * fraction, 0.)
+                top_band = H - hi
+            else:
+                amount = np.clip(1. - float(p["web"]), .25, .94)
+                if style == "weave":
+                    amount = .94
+                opening = np.full((rows, cols), amount)
+                if style == "dots":
+                    opening *= .72
+                if style == "gyroid":
+                    rr, cc = np.indices(opening.shape)
+                    opening *= .8 + .2 * np.cos((cc + rr) * math.pi / 3.)
+                top_band = float(p["top_solid"])
+            return print_geometry.contour_mesh(r_out, r_in, z[:, 0], H, collar_h,
+                                               top_band, cols, rows, opening,
+                                               p["pat_seed"], style,
+                                               p["weave_width"] if style == "weave" and not graph else 1.6,
+                                               (0 if cols > 56 else 1) if style == "micro_round" else (3 if nt > 360 else 2),
+                                               float(p["pat_hole_mm"]), str(p["pat_distribution"]))
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
@@ -677,9 +732,19 @@ def verify_mesh(verts, faces):
     V, E, F = len(verts), len(counts), len(faces)
     euler = V - E + F
     components = _count_components(f, V)
-    ok = boundary == 0 and nonmanifold == 0 and components == 1
+    tri = np.asarray(verts)[f].astype(float)
+    area2 = np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1)
+    degenerate = int(np.count_nonzero(~np.isfinite(area2) | (area2 < 1e-9)))
+    signed = np.where(e[:, 0] < e[:, 1], 1, -1)
+    _, inverse = np.unique(key, return_inverse=True)
+    winding = int(np.count_nonzero(np.bincount(inverse, weights=signed)))
+    finite = bool(np.isfinite(verts).all())
+    volume = float(np.einsum('ij,ij->i', tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() / 6.)
+    ok = boundary == 0 and nonmanifold == 0 and components == 1 and degenerate == 0 and winding == 0 and finite and volume > 1e-6
     return ok, {
         "verts": V, "edges": E, "tris": F, "euler": euler,
+        "degenerate_triangles": degenerate, "inconsistent_edges": winding,
+        "finite": finite, "volume_mm3": volume, "valid": ok,
         "boundary_edges": boundary, "nonmanifold_edges": nonmanifold,
         "components": components, "watertight": boundary == 0 and nonmanifold == 0,
         "single_piece": components == 1,

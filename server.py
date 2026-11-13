@@ -21,7 +21,9 @@ BASE_TIMEOUT = 300  # seconds -- generous so a cold build123d import under machi
                     # load (other servers running) can't trip a false "crash".
 
 sys.path.insert(0, HERE)
+import print_geometry
 import lamp_engine   # numpy only; no build123d import here
+import frame_lamps
 import graph_engine  # Phase 6 field node-graph (numpy only)
 
 os.makedirs(OUTDIR, exist_ok=True)
@@ -148,7 +150,7 @@ def make_shade(params, preview=True, export=False, dest=None):
         p["stack"] = params["stack"]
     if isinstance(params.get("graph"), dict):    # field node-graph (Phase 6) -- wins
         p["graph"] = params["graph"]
-    if preview:
+    if preview and not p["support_free"]:
         # Cap resolution for a snappy preview -- but the cap has to know what it is
         # hiding. `weave` specifies its cane in mm, so at 160 columns a 3 mm cane is
         # half a cell wide and the preview shows ragged ribbons instead of a woven
@@ -164,7 +166,10 @@ def make_shade(params, preview=True, export=False, dest=None):
                 break
         p["res_theta"] = min(p["res_theta"], cap_t)
         p["res_z"] = min(p["res_z"], cap_z)
-    v, f = lamp_engine.build_shade_mesh(p)
+    try:
+        v, f = lamp_engine.build_shade_mesh(p)
+    except (ValueError, graph_engine.GraphError) as exc:
+        return {"ok": False, "error": str(exc)}
     wall_ok, wall = lamp_engine.min_wall_ok(p)
     warnings = []
     if not wall_ok:
@@ -172,15 +177,39 @@ def make_shade(params, preview=True, export=False, dest=None):
     # p["res_theta"] is already the preview-capped value here, which is what we want:
     # the warning describes the mask the user is actually looking at.
     weave_hint = lamp_engine.weave_res_warning(p, p["res_theta"])
-    if weave_hint:
+    if weave_hint and not p["support_free"]:
         warnings.append(weave_hint)
 
+    manufacturing = print_geometry.manufacturing_report(v, f)
+    warnings.extend(manufacturing["errors"])
+    if p["support_free"]:
+        warnings.append("A1 upright design: pointed openings, ≥1.6 mm web; surface slopes constrained. Slicer verification required.")
     # Report the resolution actually used, capped or not, so the preview cannot
     # silently differ from what an export will produce.
     result = {"ok": True, "warnings": warnings,
               "res": [int(p["res_theta"]), int(p["res_z"])]}
+    result["manufacturing"] = manufacturing
+    base_dimensions, _ = lamp_engine._base_dims(lamp_engine.BASE_DEFAULTS, p)
+    result["base_preview"] = {key: base_dimensions[key] for key in (
+        "plate_r", "plate_thick", "collar_r", "seat_wall", "seat_h", "bore",
+        "lug_count", "lug_arc_deg", "lug_tip_r", "lug_z", "pocket_h")}
+
     if export:
         ok, rep = lamp_engine.verify_mesh(v, f)
+        if not ok:
+            return {"ok": False, "error": "Mesh validation failed; STL was not written.", "metrics": rep}
+        features = print_geometry.measure_features(v, f, float(p["collar_h"]) if p["bayonet"] else 0.)
+        manufacturing.update(features)
+        clearance = features["minimum_aperture_clearance_mm"]
+        thickness = features["minimum_normal_wall_estimate_mm"]
+        if clearance is not None and clearance < 1.6 - 1e-3:
+            manufacturing["errors"].append("Measured aperture clearance is below 1.6 mm.")
+        if thickness is not None and thickness < .8 - 1e-3:
+            manufacturing["errors"].append("Estimated normal wall thickness is below 0.8 mm.")
+        manufacturing["passed"] = not manufacturing["errors"]
+        if p["support_free"] and not manufacturing["passed"]:
+            return {"ok": False, "error": "Upright manufacturing checks failed; STL was not written.",
+                    "manufacturing": manufacturing}
         rel = "shade.stl"
         if dest:
             rel = "/".join(x for x in (_slug_path(dest.get("subdir", "")),
@@ -237,11 +266,39 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") in ALLOWED_HOSTS
 
     def do_GET(self):
-        if self.path == "/" or self.path.startswith("/index"):
+        if self.path.startswith("/assets/customer/"):
+            relative = self.path.split("?", 1)[0].split("/assets/customer/", 1)[1]
+            root = os.path.realpath(os.path.join(HERE, "assets", "customer"))
+            path = os.path.realpath(os.path.join(root, relative))
+            if not path.startswith(root + os.sep) or not os.path.isfile(path) or not path.endswith((".png", ".json")):
+                return self._send(404, json.dumps({"error": "not found"}))
+            with open(path, "rb") as f:
+                return self._send(200, f.read(), "image/png" if path.endswith(".png") else "application/json")
+        if self.path.split("?", 1)[0] in ("/assembly", "/assembly/", "/assembly.html"):
+            with open(os.path.join(HERE, "assembly.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path.split("?", 1)[0] == "/studio/orders":
+            with open(os.path.join(HERE, "studio-orders.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path.split("?", 1)[0] in ("/studio", "/studio/"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path.split("?", 1)[0] == "/frame-studio":
+            with open(os.path.join(HERE, "frame-studio.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path == "/customer-mobile-preview":
+            with open(os.path.join(HERE, "customer-mobile-preview.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path.split("?", 1)[0] in ("/customer", "/customer/", "/customer.html"):
+            with open(os.path.join(HERE, "customer.html"), "rb") as f:
+                return self._send(200, f.read(), "text/html; charset=utf-8")
+        if self.path == "/" or self.path.startswith("/index"):
+            with open(os.path.join(HERE, "customer.html"), "rb") as f:
                 return self._send(200, f.read(), "text/html; charset=utf-8")
         if not self._origin_ok():
             return self._send(403, json.dumps({"error": "forbidden"}))
+        if self.path == "/api/frame_catalog":
+            return self._send(200, json.dumps({"designs": frame_lamps.catalog()}))
         if self.path == "/api/defaults":
             return self._send(200, json.dumps({
                 "shade": lamp_engine.SHADE_DEFAULTS,
@@ -316,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        routes = ("/api/shade", "/api/export_shade", "/api/base", "/api/testfit",
+        routes = ("/api/frame_part", "/api/export_frame_step", "/api/frame_lamp", "/api/export_frame", "/api/shade", "/api/export_shade", "/api/base", "/api/testfit",
                   "/api/preset/save", "/api/batch/thumb", "/api/batch/finish")
         if self.path not in routes:
             return self._send(404, json.dumps({"error": "not found"}))
@@ -325,6 +382,51 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             req = json.loads(self.rfile.read(length) or b"{}")
+            if self.path == "/api/frame_part":
+                params = req.get("params", {})
+                choices = {"foot": frame_lamps.foot_cap, "male": frame_lamps.dovetail_male, "female": frame_lamps.dovetail_female, "bottom": frame_lamps.connector, "top": frame_lamps.stop_cap, "tray": frame_lamps.light_tray, "guide": frame_lamps.cable_guide}
+                name = req.get("part", "foot")
+                if name in ("post-wedge", "post-pad"):
+                    v, f = frame_lamps._cad_dovetail(params, name)
+                elif name == "panel":
+                    v, f, info = frame_lamps.panel(params)
+                elif name in choices:
+                    v, f = choices[name](params)
+                else:
+                    raise ValueError("Unknown frame part")
+                return self._send(200, json.dumps({"ok": True, "vertices": v.astype(float).ravel().tolist(), "indices": f.ravel().tolist(), "part": name}))
+            if self.path == "/api/export_frame_step":
+                import uuid, subprocess
+                cached = os.path.join(OUTDIR, "revamp", "standing-wedge-axial-cad")
+                if os.path.isfile(os.path.join(cached, "cad-parts.zip")) and os.path.isfile(os.path.join(cached, "params.json")):
+                    with open(os.path.join(cached, "params.json")) as fp:
+                        previous = json.load(fp)
+                    with open(os.path.join(cached, "cad-validation.json")) as fp:
+                        evidence = json.load(fp)
+                    if evidence.get("model_version") == "frame-cad-wedge-axial-v5" and frame_lamps.resolve(previous) == frame_lamps.resolve(req.get("params", {})):
+                        return self._send(200, json.dumps({"ok": True, "file": "revamp/standing-wedge-axial-cad/cad-parts.zip"}))
+                relative = "frame-cad/" + uuid.uuid4().hex
+                path = os.path.join(OUTDIR, relative)
+                os.makedirs(path, exist_ok=True)
+                inputs = os.path.join(path, "input.json")
+                with open(inputs, "w") as fp:
+                    json.dump(req.get("params", {}), fp)
+                runtime = "/Applications/VibeCAD.app/Contents/Resources/bin/python"
+                if not os.path.isfile(runtime):
+                    raise ValueError("The installed FreeCAD CAD runtime is unavailable on this host.")
+                with open(os.path.join(path, "cad.log"), "w") as log:
+                    result = subprocess.run([runtime, os.path.join(HERE, "tools", "export_frame_step.py"), inputs, path], stdout=log, stderr=subprocess.STDOUT, timeout=900, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1", OPENBLAS_NUM_THREADS="1"))
+                if result.returncode:
+                    raise ValueError("CAD export failed; inspect the saved cad.log. No STEP success is claimed.")
+                return self._send(200, json.dumps({"ok": True, "file": relative + "/cad-parts.zip"}))
+            if self.path == "/api/frame_lamp":
+                return self._send(200, json.dumps(frame_lamps.preview(req.get("params", {}))))
+            if self.path == "/api/export_frame":
+                import uuid
+                relative = "frame-kits/" + uuid.uuid4().hex[:12]
+                path = _safe_out(relative)
+                manifest = frame_lamps.export_kit(req.get("params", {}), path)
+                return self._send(200, json.dumps({"ok": True, "file": relative + "/parts-kit.zip", "manifest": manifest}))
             if self.path == "/api/shade":
                 return self._send(200, json.dumps(make_shade(req.get("params", {}), preview=True)))
             if self.path == "/api/export_shade":
@@ -443,7 +545,7 @@ def _finish_batch(req):
     _mark_duplicates(items)
 
     cols = ["name", "stl", "thumb", "tris", "watertight", "single_piece",
-            "components", "printable", "dup_of"] + \
+            "components", "geometry_checks_passed", "dup_of"] + \
            ["axis%d" % (i + 1) for i in range(len(axes))]
     buf = io.StringIO(newline="")
     w = csv.writer(buf)
@@ -467,13 +569,13 @@ def _finish_batch(req):
         vals = it.get("values") or []
         label = " · ".join("%s %s" % (esc(a.get("label", "?")), esc(v))
                            for a, v in zip(axes, vals))
-        bad = (not it.get("watertight")) or not it.get("single_piece", True)
+        bad = not it.get("printable", False)
         if bad:
-            note = "NOT PRINTABLE — %s" % esc(it.get("why", "failed the mesh gate"))
+            note = "GEOMETRY CHECKS FAILED — %s" % esc(it.get("why", "failed the mesh gate"))
         elif it.get("dup_of"):
             note = "identical to %s — this axis does nothing to this shape" % esc(it["dup_of"])
         else:
-            note = "%s tris" % esc(it.get("tris", "?"))
+            note = "%s tris · geometry checks passed; slicing required" % esc(it.get("tris", "?"))
         thumb = esc(os.path.basename(it.get("thumb") or ""))
         stl = esc(os.path.basename(it.get("stl") or ""))
         cls = "bad" if bad else ("dup" if it.get("dup_of") else "ok")

@@ -7,15 +7,27 @@
           "type": "form",
           "x": 40,
           "y": 40,
-          "params": { "r_bottom": 58, "r_top": 44, "bulge": 48, "bulge_pos": 0.55 }
+          "params": {
+            "r_bottom": 58,
+            "r_top": 44,
+            "bulge": 30,
+            "bulge_pos": 0.55
+          }
         },
         {
           "id": "wv",
           "type": "weave",
           "x": 40,
           "y": 250,
-          "params": { "cols": 16, "turns": 0.35, "width": 0.1, "fine": 2,
-                      "crossing": 1, "rings": 2, "ring_w": 0.05 }
+          "params": {
+            "cols": 16,
+            "turns": 0.35,
+            "width": 0.1,
+            "fine": 2,
+            "crossing": 1,
+            "rings": 2,
+            "ring_w": 0.05
+          }
         },
         {
           "id": "cane",
@@ -29,28 +41,56 @@
           "type": "displace",
           "x": 300,
           "y": 90,
-          "params": { "amp": 0.009, "mode": 1 }
+          "params": {
+            "amp": 0.0,
+            "mode": 1
+          }
         },
         {
           "id": "out",
           "type": "output",
           "x": 560,
           "y": 170,
-          "params": { "threshold": 0.5, "invert": 0, "top_solid": 12 }
+          "params": {
+            "threshold": 0.5,
+            "invert": 0,
+            "top_solid": 12
+          }
         }
       ],
       "edges": [
-        { "from": "form", "to": "disp", "toPort": "base" },
-        { "from": "wv", "to": "cane", "toPort": "x" },
-        { "from": "cane", "to": "disp", "toPort": "detail" },
-        { "from": "disp", "to": "out", "toPort": "radius" },
-        { "from": "wv", "to": "out", "toPort": "holes" }
+        {
+          "from": "form",
+          "to": "disp",
+          "toPort": "base"
+        },
+        {
+          "from": "wv",
+          "to": "cane",
+          "toPort": "x"
+        },
+        {
+          "from": "cane",
+          "to": "disp",
+          "toPort": "detail"
+        },
+        {
+          "from": "disp",
+          "to": "out",
+          "toPort": "radius"
+        },
+        {
+          "from": "wv",
+          "to": "out",
+          "toPort": "holes"
+        }
       ]
     },
     "height": 205,
     "wall": 1.6,
-    "res_theta": 560,
-    "res_z": 320
+    "res_theta": 240,
+    "res_z": 240,
+    "pat_rows": 5
   },
   "base": {}
 }

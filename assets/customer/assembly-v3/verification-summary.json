@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "revision": "retained-tray-v3-holder-integral-tongues",
+  "title": "LUME reinforced tray assembly",
+  "status": "Review prototype — CAD and Orca slicing checked; physical testing pending",
+  "print_counts": {
+    "corner_holders": 4,
+    "flat_trays": 1,
+    "total_printed_parts": 5,
+    "loose_locking_parts": 0,
+    "active_diagonal_catches": 2,
+    "clearance_apertures": 2
+  },
+  "parts": [
+    {
+      "id": "snap-reinforced-holder",
+      "label": "Corner holder",
+      "quantity": 4,
+      "stl_sha256": "4bb3dc8dff21687dc43d2682516872b950dccc29d2e88f1606d5c1b475350cdf",
+      "mesh_watertight": true,
+      "slice_completed": true,
+      "orientation": "Upright, sleeve/stem bottom on the bed",
+      "layers": 378,
+      "unsupported_island_candidates": 0,
+      "max_internal_bridge_estimate_mm": 3.479,
+      "estimated_grams_each": 33.78,
+      "estimated_seconds_each": 6022,
+      "downloads": {
+        "stl": "/download/revamp/retained-tray-v3/snap-reinforced-holder.stl",
+        "step": "/download/revamp/retained-tray-v3/snap-reinforced-holder.step",
+        "orca_3mf": "/download/revamp/retained-tray-v3/orca-holder-slice/snap-reinforced-holder-sliced.3mf",
+        "slice_report": "/download/revamp/retained-tray-v3/orca-holder-slice/slice-evidence.json"
+      }
+    },
+    {
+      "id": "flat-tray",
+      "label": "Flat tray",
+      "quantity": 1,
+      "stl_sha256": "e329344aa3319434813a7a34431a764552d21a41e053ecf2fd6583ddf0782c5b",
+      "mesh_watertight": true,
+      "slice_completed": true,
+      "orientation": "Flat broad underside on the bed",
+      "layers": 15,
+      "unsupported_island_candidates": 0,
+      "max_internal_bridge_estimate_mm": 1.8,
+      "estimated_grams_each": 60.01,
+      "estimated_seconds_each": 6797,
+      "downloads": {
+        "stl": "/download/revamp/retained-tray-v3/flat-tray.stl",
+        "step": "/download/revamp/retained-tray-v3/flat-tray.step",
+        "orca_3mf": "/download/revamp/retained-tray-v3/orca-tray-slice/flat-tray-sliced.3mf",
+        "slice_report": "/download/revamp/retained-tray-v3/orca-tray-slice/slice-evidence.json"
+      }
+    }
+  ],
+  "cad": {
+    "sampled_insertion_pass": true,
+    "sampled_release_pass": true,
+    "lateral_offsets_pass": true,
+    "seated_rigid_overlap_mm3": 0.0,
+    "scope": "Nominal aligned Z translation; 9 lateral offsets +/-0.1mm; no angular, manufacturing scale, beam force, or thermal simulation.",
+    "continuous_flex_simulation": false,
+    "report_url": "/download/revamp/retained-tray-v3/verification.json"
+  },
+  "slicing": {
+    "completed": true,
+    "meaning": "Actual toolpaths generated and screened; not physical print certification",
+    "slicer": "OrcaSlicer",
+    "version": "2.4.2",
+    "printer": "Bambu Lab A1",
+    "nozzle_mm": 0.4,
+    "layer_height_mm": 0.2,
+    "wall_loops": 3,
+    "supports_enabled": false,
+    "material": "Generic PETG — provisional",
+    "holder_brim_mm": 5,
+    "profile_warning": "Bundled 80°C bed setting triggers Orca bed_temperature_too_high_than_filament warning. Confirm purchased-filament settings before printing.",
+    "report_url": "/download/revamp/retained-tray-v3/orca-print-review.json"
+  },
+  "physical": {
+    "verified": false,
+    "pending": [
+      "Printed hook edge quality",
+      "Snap and release force",
+      "Layer bonding and repeated flexing",
+      "Holding strength, creep and heat performance"
+    ]
+  },
+  "print_ready_certified": false,
+  "animation": {
+    "purpose": "Illustrate assembly and release",
+    "force_simulated": false,
+    "click_sound_verified": false
+  },
+  "downloads": {
+    "review_pack": "/download/revamp/retained-tray-v3/LUME-Tray-v3-Review-Pack.zip",
+    "print_notes": "/download/revamp/retained-tray-v3/PRINT_REVIEW.md",
+    "assembly_notes": "/download/revamp/retained-tray-v3/ASSEMBLY.md"
+  },
+  "full_lamp_illustration": {
+    "timber_parts": 12,
+    "vertical_posts": 4,
+    "rails": 8,
+    "printed_parts": 49,
+    "total_instances": 61,
+    "steps": 9,
+    "duration_seconds": 27,
+    "scope": "Existing Pearl frame and shade prototypes with revised V3 tray module; full-lamp insertion paths and strength not newly verified."
+  }
+}

@@ -1,7 +1,28 @@
-{"shade": {"height": 230, "r_bottom": 44, "r_top": 40, "bulge": 72, "bulge_pos": 0.55,
-           "wall": 1.6, "lobes": 0, "lobe_amp": 0.0, "twist_turns": 0.0,
-           "ripple_waves": 0, "ripple_amp": 0, "noise_amp": 0,
-           "pattern": "weave", "pat_cols": 16, "weave_turns": 0.35, "weave_width": 4.0,
-           "weave_fine": 2, "weave_rings": 2, "weave_ring_w": 9.0,
-           "top_solid": 14, "res_theta": 560, "res_z": 320},
- "base": {}}
+{
+  "shade": {
+    "height": 230,
+    "r_bottom": 44,
+    "r_top": 40,
+    "bulge": 40,
+    "bulge_pos": 0.55,
+    "wall": 1.6,
+    "lobes": 0,
+    "lobe_amp": 0.0,
+    "twist_turns": 0.0,
+    "ripple_waves": 0,
+    "ripple_amp": 0,
+    "noise_amp": 0,
+    "pattern": "weave",
+    "pat_cols": 24,
+    "weave_turns": 0.35,
+    "weave_width": 2.4,
+    "weave_fine": 2,
+    "weave_rings": 2,
+    "weave_ring_w": 9.0,
+    "top_solid": 14,
+    "res_theta": 240,
+    "res_z": 240,
+    "pat_rows": 8
+  },
+  "base": {}
+}

@@ -20,8 +20,8 @@
           "x": 40,
           "y": 230,
           "params": {
-            "cells_u": 14,
-            "cells_v": 14,
+            "cells_u": 24,
+            "cells_v": 8,
             "jitter": 0.7,
             "metric": 1,
             "seed": 5

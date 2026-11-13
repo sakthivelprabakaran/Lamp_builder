@@ -127,7 +127,7 @@
     </div>
     <div class="tiny">Node graph = Grasshopper-style field patterns (opens below the view)</div>
   </div>
-  <div id="controls"></div>
+  <div style="padding:12px"><a href="/studio/orders" style="color:var(--accent2)">Orders &amp; production ↗</a> · <a href="/customer" style="color:var(--accent2)">Customer preview ↗</a></div><div style="padding:12px"><a href="/frame-studio" style="color:var(--accent2)">Four-post / connector parametric Studio ↗</a></div><div id="controls"></div>
   <div id="foot">
     <div class="row" style="margin:0">
       <label>Preset</label>
@@ -186,7 +186,7 @@
     <div class="seg" id="showSeg">
       <button data-show="shade" class="on">Shade</button>
       <button data-show="base">Base</button>
-      <button data-show="both">Both</button>
+      <button data-show="both">Both</button><button id="presentView">Present</button>
     </div>
   </div>
   <div id="ndrawer">
@@ -212,21 +212,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 // ---- control schema (label, key, min, max, step, group) ------------------
 const SHADE_CTRL = [
-  ['Shade','height','Height',80,320,1],
-  ['Shade','wall','Wall thickness',0.6,2.5,0.1],
-  // Woven rattan needs far more circumferential resolution than the other patterns:
-  // its cane width is in mm, so a coarse grid quantises it into ragged ribbons.
+  ['Shade','height','Height',80,250,1],
+  ['Shade','wall','Wall thickness',0.8,2.5,0.1],
+  // Resolution refines the host surface; opening contours retain their topology.
   ['Quality','res_theta','Around res',60,720,20],
   ['Quality','res_z','Vertical res',40,420,10],
   ['Perforation','pat_cols','Cells around',4,40,1],
   ['Perforation','pat_rows','Cells up',3,30,1],
   ['Perforation','web','Web / hole size',0.08,0.6,0.01],
   ['Perforation','pat_seed','Voronoi seed',1,50,1],
-  ['Perforation','weave_turns','Weave: helix revs',-1.5,1.5,0.02],
-  ['Perforation','weave_width','Weave: cane width mm',1,12,0.2],
-  ['Perforation','weave_fine','Weave: fine family',0,5,1],
-  ['Perforation','weave_rings','Weave: binding hoops',0,8,1],
-  ['Perforation','weave_ring_w','Weave: hoop width mm',2,20,0.5],
+  ['Perforation','weave_width','Lattice web width mm',1,12,0.2],
   ['Perforation','top_solid','Top solid band',0,40,1],
   ['Twist-lock','bayonet','Enable (0/1)',0,1,1],
   ['Twist-lock','collar_h','Collar height',10,30,1],
@@ -269,6 +264,12 @@ const shade = {}, base = {};
 window.LS = { shade, base, get graph(){ return NG.graph; }, get gmode(){ return NG.mode; } };  // headless-verify hook
 
 // ---- three.js scene -------------------------------------------------------
+// Stable presentation framing for before/after geometry comparisons.
+let renderView = false;
+document.getElementById('presentView').onclick=()=>{renderView=!renderView;document.body.classList.toggle('presentation',renderView);fitCamera();};
+const presentStyle=document.createElement('style');
+presentStyle.textContent='body.presentation #ndrawer{display:none!important}';
+document.head.appendChild(presentStyle);
 const cv = document.getElementById('cv');
 const renderer = new THREE.WebGLRenderer({canvas:cv, antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
@@ -303,6 +304,10 @@ function fitCamera(){
   if(shadeMesh && (showMode!=='base')) box.expandByObject(shadeMesh);
   if(baseMesh && (showMode!=='shade')) box.expandByObject(baseMesh);
   if(box.isEmpty()) return;
+  if(renderView){
+    controls.target.set(0,0,115); bulb.position.set(0,0,115);
+    camera.position.set(360,-300,285); return;
+  }
   const c = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
   controls.target.copy(c); bulb.position.set(c.x, c.y, c.z);
   const r = Math.max(s.x,s.y,s.z);
@@ -408,16 +413,15 @@ function buildControls(){
       row.innerHTML = `<label>Pattern</label>
         <select id="sel_pattern">
           <option value="none">None (solid wall)</option>
-          <option value="dots">Perforated dots (round holes)</option>
-          <option value="honeycomb">Honeycomb (hexagons)</option>
-          <option value="voronoi">Voronoi (organic)</option>
-          <option value="gyroid">Gyroid (wavy struts)</option>
-          <option value="grid">Grid (square holes)</option>
-          <option value="weave">Woven rattan (cane cage)</option>
+          <option value="micro_round">Fine rounded perforations</option>
+          <option value="dots">Pointed apertures</option>
+          <option value="honeycomb">Diamond honeycomb</option>
+          <option value="voronoi">Organic diamond sizes</option>
+          <option value="gyroid">Wave diamond lattice</option>
+          <option value="grid">Pointed grid</option>
+          <option value="weave">Rattan inspired diamond cage</option>
         </select>
-        <div class="tiny">Holes are cut through the wall and sealed watertight. Collar + top band stay solid.
-        <b>Woven rattan</b> is the inverse — mostly open, and its cane/hoop widths are real mm, so
-        raise <i>Cells around</i> (Quality) until the cane stops looking ragged.</div>`;
+        <div class="tiny">Upright A1 mode uses smooth pointed openings with at least 1.6 mm connecting web. Pattern fields vary their size; roofs and surface slopes are constrained. Collar and top band stay solid. Inspect slicing before printing without supports.</div>`;
       body.appendChild(row);
     }
     if(g==='Holder'){       // holder-type is a dropdown, not a slider
@@ -632,7 +636,11 @@ async function loadPreset(name){
   const r = await fetch('/api/preset/'+encodeURIComponent(name)); const d = await r.json();
   const s = d.shade||{};
   shade.stack = Array.isArray(s.stack) ? s.stack : stackFromFlat(s);
-  Object.assign(shade, s); Object.assign(base, d.base||{});
+  const stack = shade.stack;
+  Object.keys(shade).forEach(k=>delete shade[k]);
+  Object.keys(base).forEach(k=>delete base[k]);
+  Object.assign(shade, structuredClone(defaults.shade), s, {stack});
+  Object.assign(base, structuredClone(defaults.base), d.base||{});
   syncSliders(); renderStack(); baseDirty=true;
   if(s.graph && s.graph.nodes){          // graph preset -> restore node graph + mode
     NG.graph = JSON.parse(JSON.stringify(s.graph)); syncUid(); setMode('graph'); return;
@@ -807,7 +815,7 @@ async function runCatalogue(){
                 : (m.components>1 ? m.components+' loose pieces' : '');
       items.push({name:vname, values:combo, stl:ed.files.stl, thumb:trel, tris:m.tris,
                   watertight:!!m.watertight, single_piece:m.components===1,
-                  components:m.components, printable:(m.watertight && m.components===1), why});
+                  components:m.components, printable:!!(m.valid && ed.manufacturing?.passed), why});
       catProg(i+1, combos.length, short);
     }
     if(!items.length){ catProg(0,0,'nothing exported'); return; }
@@ -818,7 +826,7 @@ async function runCatalogue(){
       const secs=((performance.now()-t0)/1000).toFixed(0);
       document.getElementById('catDone').innerHTML =
         `${items.length} variant${items.length>1?'s':''} in ${secs}s`
-        + (bad?` · <span style="color:var(--warn)">${bad} not printable</span>`:'')
+        + (bad?` · <span style="color:var(--warn)">${bad} failed geometry checks</span>`:'')
         // A swept param can be inert for the current shape (pat_cols with no
         // perforation op, say); the server hashes the STLs, so say so plainly.
         + (fin.dupes?` · <span style="color:var(--warn)">${fin.dupes} identical — that axis does nothing here</span>`:'')
@@ -838,7 +846,7 @@ async function runCatalogue(){
 // ---- show toggle ----------------------------------------------------------
 function setShow(mode){
   showMode=mode;
-  document.querySelectorAll('#showSeg button').forEach(b=>b.classList.toggle('on', b.dataset.show===mode));
+  document.querySelectorAll('#showSeg button[data-show]').forEach(b=>b.classList.toggle('on', b.dataset.show===mode));
   setVisibility(); fitCamera();
   // The toggle only changes visibility; if the base has never been built (or is
   // stale after a param change) generate it now so the view isn't empty.
@@ -846,7 +854,7 @@ function setShow(mode){
     hud('building base…'); genBase(false);
   }
 }
-document.querySelectorAll('#showSeg button').forEach(b=> b.onclick=()=>setShow(b.dataset.show));
+document.querySelectorAll('#showSeg button[data-show]').forEach(b=> b.onclick=()=>setShow(b.dataset.show));
 document.getElementById('exportShade').onclick = exportShade;
 document.getElementById('genBase').onclick = ()=>genBase(true);
 document.getElementById('genTestfit').onclick = genTestfit;
@@ -1072,6 +1080,7 @@ function fitGraph(){
     applyTransform();
   }, {passive:false});
   await loadPresetList();
+  try{const incoming=JSON.parse(localStorage.getItem('lume.studio.import.v1')||'null');if(incoming&&incoming.design?.kind!=='frame'){const source=incoming.customizations?.params||{};for(const [k,v] of Object.entries(source)){if(k in shade)shade[k]=structuredClone(v)}if(source.stack)shade.stack=structuredClone(source.stack);syncSliders();renderStack();baseDirty=true;localStorage.removeItem('lume.studio.import.v1');showWarn(['Imported order '+incoming.id+' — review parameters before production.'])}}catch(e){showWarn(['Order import could not be loaded.'])}
   runShade();
 })();
 </script>

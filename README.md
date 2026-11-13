@@ -1,7 +1,7 @@
 # Lamp Studio
 
 A parametric lamp-shade + holder-base design engine (build123d), inspired by
-Grasshopper/Rhino. Turn sliders → get an infinite family of unique, print-ready
+Grasshopper/Rhino. Turn sliders → get an family of unique, geometrically screened
 shades and a matching, tool-free-assembly base. Part of the 3D-print product line.
 
 ![port](https://img.shields.io/badge/localhost-8776-blue)
@@ -26,12 +26,12 @@ A shade is one radius field `r(θ, z)` built from composable operators:
 | Organic | noise_amp, noise_scale, seed | irregular organic surface |
 
 Combined, these span an effectively infinite set of continuous-wall shades.
-Perforated patterns (honeycomb / voronoi / gyroid / lattice) are Phase 3.
+Perforated designs use a staggered contour mesh with flowing crossing ribs. Graph fields vary aperture density and size; the mesher constrains roof slopes and web clearances for upright printing.
 
 ## Printing
 - **LED / cool bulbs only** — PLA/PETG will soften near hot bulbs.
-- Wall 0.8–1.6 mm prints translucent and glows well; thin single-wall shades
-  slice nicely in **vase / spiralize** mode.
+- A1 target: 0.4 mm nozzle, upright Z, supports disabled, 250 mm design envelope. Perforated shades require ordinary wall printing, not vase/spiral mode.
+- See [PRINTING.md](PRINTING.md) for geometry constraints, verification and limits.
 - Base bore defaults to 10.5 mm (clearance for an M10 lamp nipple); set it to
   match your socket/cord kit.
 
@@ -42,5 +42,18 @@ build123d base worker · `index.html` three.js UI · `presets/` saved params ·
 `STATE.md` (where we are).
 
 ## Requires
-Python 3, `numpy`, `build123d` (already installed on this machine). No other deps
-until Phase 3, which will need `sdf` / `manifold3d` (owner approval first).
+Python 3 and `numpy` for shades. `build123d` is required only for base/STEP generation and is unavailable in this environment. No new geometry dependencies were added.
+
+## Customer experience
+Open `/customer` on the same local server for the separate Lume configurator.
+The internal studio remains at `/`. The customer library contains individually
+geometry-screened products across twelve silhouettes, woven/perforated structures
+and continuous sculptural surfaces, plus fine rounded-hole studies. Search,
+silhouette and structure filters, lazy thumbnails and twelve-card pages keep it
+manageable. Only the chosen product loads a full mesh. Customization offers height,
+density or relief depth, color and a complete-lamp/shade-only visualization.
+The matching base preview uses engine mating dimensions. Downloads contain the
+shade STL only; base CAD export requires unavailable build123d. Lighting is a
+visualization, not an electrical/thermal/material validation. `/customer-mobile-preview`
+is a real 390 × 844 iframe for responsive review. See CATALOG.md for per-product
+validation states and the workflow for adding products one at a time.
